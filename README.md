@@ -16,9 +16,9 @@ Why, with the numbers: [PHILOSOPHY.md](https://github.com/gorillanobakaa-dot/Gor
 > hardware sensor on a Sony VAIO SVE14A3AJ — and any similar Linux machine —
 > into one live, colour-coded readout that follows the window as you resize it.*
 
-[![sensors.gorilla v2.0.0 running live in a 176-column terminal: the Skynet banner on top, then two columns — temperatures, cooling, RAPL wattage, throttle status and battery health on the left; SSD health and lifetime projections on the right](dashboard.png)](dashboard.png)
+[![sensors.gorilla v2.1.0 running live in a 176-column terminal on a 1600x900 screen during a Firefox compile: the Skynet banner; temperatures, cooling, RAPL wattage, throttle status and battery on the left; SSD health, lifetime projections and the new load, memory and Sony controls section on the right, with 6.3 GB in swap and a load of 10.2 on 8 threads](dashboard.png)](dashboard.png)
 
-*v2.0.0 in a 176-column terminal. Click for full resolution. The footer reports
+*v2.1.0 in a 176-column terminal, mid-compile. Click for full resolution. The footer reports
 the live column count, so you can see the layout tracking the window.*
 
 ---
@@ -40,6 +40,8 @@ Run one command in the terminal and you get a full-screen dashboard showing:
   - *"If you just browse the web and watch YouTube, this drive will last 1,918 years"*
   - *"If you compile Firefox from scratch every single day, it will last 160 years"*
   - *"If you run it at full enterprise blast (1 full overwrite per day as Kingston designed it for), it lasts 5 years"*
+- 🧠 **Load and memory** — How much RAM and swap is in use, how busy the processor is, whether turbo is on, and whether the kernel itself is holding the CPU back to cool it
+- 🎛️ **Sony controls** — What the laptop's own firmware switches are set to: forced fan, USB charging while off, waking when the lid opens, the touchpad
 
 Across the top: a **Gorilla Skynet System** banner made of glowing letters in fire colours (cyan → orange → red) rendered entirely in text characters — no images, just Unicode. Below it the data is laid out in **two columns** — temperatures, cooling and power on the left, storage health on the right — so the whole dashboard fits a maximized window without scrolling.
 
@@ -184,6 +186,11 @@ are looking at, which is the entire point of having one.
 | Cycle Count | `/sys/class/power_supply/BAT0/cycle_count` | — |
 | Sony Care Limiter | `/sys/devices/platform/sony-laptop/battery_care_limiter` | — |
 | Sony Care Health | `/sys/devices/platform/sony-laptop/battery_care_health` | — |
+| RAM / Swap | `/proc/meminfo` (MemTotal, MemAvailable, SwapTotal, SwapFree) | — |
+| Load | `os.getloadavg()` against the CPU thread count | — |
+| Turbo / Governor | `/sys/devices/system/cpu/intel_pstate/no_turbo`, `cpu0/cpufreq/scaling_governor` | — |
+| Kernel Cooling | `/sys/class/thermal/cooling_device*/{type,cur_state,max_state}` (Processor, intel_powerclamp) | — |
+| Sony Controls | `/sys/devices/platform/sony-laptop/{fan_forced,usb_charge,lid_resume_S5,touchpad}` | — |
 
 ### SSD Lifespan Calculation
 
@@ -223,6 +230,15 @@ sensors.gorilla
 ```
 
 ### Changelog
+
+**2.1.0 — 2026-10-15**
+
+- **What a compile presses on.** One new section, `[LOAD, MEMORY & SONY CONTROLS]`: RAM and swap,
+  load against the thread count, turbo and the frequency governor, the kernel's own cooling
+  (passive Processor states and `intel_powerclamp`, a throttle the MSR counters do not show), and
+  the `sony-laptop` switches. The first reading, mid-way through a Firefox build, showed 6 GB in
+  swap. Four lines in the right column, so the dashboard grows by three lines (35 to 38) and still
+  fits a 1600×900 screen at 174 columns.
 
 **2.0.0 — 2026-08-13**
 
