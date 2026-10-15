@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 2.0.0 · updated 26-08-13-20-02
+# Version: 2.1.0 · updated 26-10-15-01-07
 # sensors.gorilla — Sony VAIO Gorilla System Dashboard
 # Maps every readable hardware sensor on the Sony VAIO SVE14A3AJ:
 #   CPU cores (coretemp), Motherboard (acpitz), Intel HD 4000 (shared package),
@@ -291,6 +291,64 @@ def _fire_colour(x: int, width: int):
         s = (t - 0.66) / 0.34
         return int(220 + s * (180 - 220)), int(30 + s * (0 - 30)), int(s * 60)
 
+def get_memory():
+    """RAM and swap from /proc/meminfo -> dict of GB, or None. The Firefox link (ThinLTO) is the hungriest step."""
+    info = {}
+    try:
+        for line in open("/proc/meminfo", encoding="utf-8"):
+            k, v = line.split(":", 1)
+            info[k] = int(v.split()[0]) / 1048576.0
+    except (OSError, ValueError):
+        return None
+    if "MemTotal" not in info:
+        return None
+    return {"total": info["MemTotal"], "avail": info.get("MemAvailable", 0.0),
+            "swap_total": info.get("SwapTotal", 0.0), "swap_used": info.get("SwapTotal", 0.0) - info.get("SwapFree", 0.0)}
+
+
+def get_load():
+    """(1, 5, 15 minute load averages, CPU threads) or None."""
+    try:
+        return os.getloadavg() + (os.cpu_count() or 0,)
+    except OSError:
+        return None
+
+
+def get_cpu_policy():
+    """Turbo and the frequency governor: what decides how hard the i7 may run."""
+    no_turbo = get_file_val("/sys/devices/system/cpu/intel_pstate/no_turbo")
+    turbo = "N/A" if no_turbo == "N/A" else ("on" if no_turbo == "0" else "off")
+    return turbo, get_file_val("/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor")
+
+
+def get_kernel_cooling():
+    """The kernel's own cooling: passive Processor states and intel_powerclamp idle injection.
+    -> (busy list of 'type cur/max', summary). A non-zero state is throttling the counters above do not show."""
+    busy, kinds = [], {}
+    for d in sorted(glob.glob("/sys/class/thermal/cooling_device*")):
+        t = get_file_val(os.path.join(d, "type"))
+        cur, mx = get_file_val(os.path.join(d, "cur_state")), get_file_val(os.path.join(d, "max_state"))
+        kinds[t] = kinds.get(t, 0) + 1
+        if cur not in ("N/A", "0"):
+            busy.append(f"{t} {cur}/{mx}")
+    summary = ", ".join(f"{t} x{n}" if n > 1 else t for t, n in kinds.items())
+    return busy, summary
+
+
+def get_sony_controls():
+    """Sony's own switches (sony-laptop): not sensors, but what the firmware is set to do."""
+    base = "/sys/devices/platform/sony-laptop/"
+    out = {}
+    for k in ("fan_forced", "kbd_backlight", "kbd_backlight_timeout", "usb_charge", "lid_resume_S5", "touchpad",
+              "thermal_profiles"):
+        out[k] = get_file_val(base + k)
+    return out
+
+
+def _onoff(v):
+    return {"0": "off", "1": "on", "-1": "not available"}.get(v, v)
+
+
 def get_skynet_logo_lines():
     """Return list of ANSI-painted block-art lines, no external deps."""
     max_w = max(len(l) for l in _LOGO_RAW)
@@ -505,6 +563,29 @@ def build_dashboard():
     right_lines.append(f"  └─ \033[91mWrite Intense  \033[0m (~5,760 GB/day): \033[91m{_yrs(5760):<11}\033[0m\x00  3 DWPD — extreme HPC / txn logging")
     right_lines.append("")
     right_lines.append("  \033[90mNote: Projections from SMART attr 241 TBW counter. WAF not accounted for.\033[0m")
+
+    # Load, memory, the kernel's own cooling and Sony's switches (2026-10-15: what a Firefox compile presses on), kept to
+    # four lines so the dashboard still fits a 1600x900 screen without scrolling (height is the budget that breaks)
+    right_lines.append("")
+    right_lines.append("\033[1m[LOAD, MEMORY & SONY CONTROLS]\033[0m")
+    mem, load = get_memory(), get_load()
+    if mem:
+        pct = 100.0 * (mem["total"] - mem["avail"]) / mem["total"] if mem["total"] else 0
+        colour = "\033[91m" if pct >= 90 else ("\033[93m" if pct >= 75 else "\033[92m")
+        sw = "\033[91m" if mem["swap_used"] > 0.5 else "\033[92m"
+        right_lines.append(f"  RAM / Swap In Use         : {colour}{mem['total'] - mem['avail']:.1f}/{mem['total']:.1f} GB ({pct:.0f}%)"
+                           f"\033[0m  |  swap {sw}{mem['swap_used']:.1f}/{mem['swap_total']:.1f} GB\033[0m")
+    turbo, gov = get_cpu_policy()
+    if load:
+        right_lines.append(f"  Load / Turbo / Governor   : {load[0]:.1f} {load[1]:.1f} {load[2]:.1f} ({load[3]} threads)"
+                           f"  |  turbo \033[96m{turbo}\033[0m  |  \033[96m{gov}\033[0m")
+    busy, kinds = get_kernel_cooling()
+    right_lines.append("  Kernel Cooling            : " + (f"\033[91m{', '.join(busy)}\033[0m" if busy else
+                                                          f"\033[92mnone active\033[0m  ({kinds})"))
+    sony = get_sony_controls()
+    right_lines.append(f"  Sony                      : fan forced {_onoff(sony['fan_forced'])} · usb charge "
+                       f"{_onoff(sony['usb_charge'])} · lid resume {_onoff(sony['lid_resume_S5'])} · "
+                       f"touchpad {_onoff(sony['touchpad'])}")
 
     # ── Layout ────────────────────────────────────────────────────────────────
     # Two columns wherever they fit, and they should fit: a 1600x900 screen is
