@@ -1,4 +1,4 @@
-<!-- Version: 2.2.0 · updated 26-08-13-20-13 -->
+<!-- Version: 2.2.0 · updated 26-10-23-16-40 -->
 # sensors.gorilla 🦍
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -20,6 +20,11 @@ Why, with the numbers: [PHILOSOPHY.md](https://github.com/gorillanobakaa-dot/Gor
 
 *v2.1.0 in a 176-column terminal, mid-compile. Click for full resolution. The footer reports
 the live column count, so you can see the layout tracking the window.*
+
+[![sensors.gorilla v2.2.0 live on a 2011 MacBook Air 4,1 (macOS 10.13 High Sierra, 11-inch 1366x768 screen) in a maximised 169-column Terminal, with Macs Fan Control switched off: CPU proximity 47.9 C and die 55.6 C, the fan at 2026 rpm under macOS's own control, no CPU speed limit, battery health 79.7% after 99 cycles, 2.4 of 4.0 GB RAM in use; the whole panel takes 20 of the window's 40 rows](dashboard-macbook-air.png)](dashboard-macbook-air.png)
+
+*v2.2.0 on a 2011 MacBook Air (macOS 10.13), the 11-inch screen. Same command, no password, nothing
+installed: the Mac's sensors are read from its SMC chip through macOS's own IOKit.*
 
 ---
 
@@ -60,6 +65,20 @@ The SSD lifespan maths uses the drive manufacturer's (Kingston) official rated e
 ## 💻 Section B — For the Developer
 
 ### Requirements
+
+**On an Intel Mac** (added 2.2.0, tested on a MacBook Air 4,1 with macOS 10.13.6):
+
+- Python 3 (macOS 10.13 has none: the python.org installer puts it in `/usr/local/bin/python3`)
+- Nothing else. No Homebrew, no Xcode, no password. Temperatures and fans come from the SMC (System
+  Management Controller), which macOS lets any user read; battery from `ioreg`, memory from `vm_stat`,
+  the CPU speed limit from `pmset -g therm`.
+- Sized for the 11-inch screen: a maximised Terminal there is 169 x 33 to 40 rows. The panel is 20 rows
+  and 126 columns; at 80 x 24 it stacks into one column of 23 rows. The banner goes first when the
+  window is too short.
+- `--json` prints one reading as JSON, for test scripts (the Gorilla browser heat tests use it).
+- Apple Silicon Macs are untested.
+
+**On Linux:**
 
 - Python 3 (stdlib only — `glob`, `os`, `subprocess`, `re`, `time`, `argparse`)
 - `smartmontools` (`sudo apt install smartmontools`) — for SMART attribute reads via `sudo smartctl -A /dev/sda`
@@ -230,6 +249,16 @@ sensors.gorilla
 ```
 
 ### Changelog
+
+**2.2.0 (2026-10-23)**
+
+- **Intel Macs.** A macOS side: temperatures and fans from the SMC through IOKit (ctypes, standard
+  library only), battery health and cycles, RAM in use as Activity Monitor counts it, the CPU speed
+  limit macOS applies when hot, who controls the fan (macOS or Macs Fan Control), and the Gorilla
+  browser's own memory against its 500 MB budget. Born because browser heat tests on the MacBook Air
+  must run with Macs Fan Control off, and the only reading until then was that app's menu-bar text.
+- **256 colours in Apple's Terminal.** macOS Terminal up to 10.15 has no 24-bit colour and painted
+  blocks across the banner; it now gets the nearest of the 216 standard colours.
 
 **2.1.0 — 2026-10-15**
 
