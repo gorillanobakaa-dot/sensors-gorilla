@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Version: 2.1.0 · updated 26-10-15-01-07
+# Version: 2.2.0 · updated 26-10-23-16-39
 # sensors.gorilla — Sony VAIO Gorilla System Dashboard
 # Maps every readable hardware sensor on the Sony VAIO SVE14A3AJ:
 #   CPU cores (coretemp), Motherboard (acpitz), Intel HD 4000 (shared package),
@@ -349,6 +349,9 @@ def _onoff(v):
     return {"0": "off", "1": "on", "-1": "not available"}.get(v, v)
 
 
+_APPLE_TERMINAL = os.environ.get("TERM_PROGRAM") == "Apple_Terminal"
+
+
 def get_skynet_logo_lines():
     """Return list of ANSI-painted block-art lines, no external deps."""
     max_w = max(len(l) for l in _LOGO_RAW)
@@ -363,11 +366,266 @@ def get_skynet_logo_lines():
                 out.append(" ")
             else:
                 r, g, b = _fire_colour(i, max_w)
-                out.append(f"\033[1;38;2;{r};{g};{b}m{ch}")
+                if _APPLE_TERMINAL:
+                    # macOS Terminal up to 10.15 has no 24-bit colour: it read 38;2;r;g;b as other codes and painted
+                    # blocks across the banner (MacBook Air, 10.13, 2026-10-23). The nearest of xterm's 216 colours.
+                    n = 16 + 36 * round(r / 51) + 6 * round(g / 51) + round(b / 51)
+                    out.append(f"\033[1;38;5;{n}m{ch}")
+                else:
+                    out.append(f"\033[1;38;2;{r};{g};{b}m{ch}")
         result.append("".join(out) + "\033[0m")
     return result
 
+# ---------------------------------------------------------------------------
+# macOS (Intel Macs, 2026-10-23). The Linux readers above find nothing on a Mac: there is no /sys. The sensors live in
+# the SMC (System Management Controller), which macOS lets any user READ through IOKit, so ctypes is enough: no
+# password, nothing to install, no Xcode. Measured first on a MacBook Air 4,1 (2011, macOS 10.13.6) with Macs Fan
+# Control switched off: CPU 47.8 C, fan 2012 rpm (Apple's own minimum is 2000; an Air's fan never stops).
+# Keys: TC0P CPU proximity, TC0D/TC0E/TC0F CPU die, TG0P GPU, TPCD platform controller, TM0P memory, Th1H heat
+# pipe, TB0T battery; F<n>Ac/Mn/Mx fan actual/min/max rpm, FNum fan count. A key the Mac lacks is left out.
+# ---------------------------------------------------------------------------
+_SMC_TEMPS = (("TC0P", "CPU proximity"), ("TC0D", "CPU die"), ("TC0E", "CPU die 2"), ("TC0F", "CPU die 3"),
+              ("TC0H", "CPU heatsink"), ("TG0P", "GPU proximity"), ("TG0D", "GPU die"), ("TPCD", "Platform controller"),
+              ("TM0P", "Memory"), ("Th0H", "Heat pipe"), ("Th1H", "Heat pipe 2"), ("TB0T", "Battery"))
+
+
+def smc_read():
+    """{'temps': {key: C}, 'fans': [{rpm, min, max}]} from the SMC, or None when it cannot be opened."""
+    import ctypes
+    import ctypes.util
+    import struct
+
+    class KeyInfo(ctypes.Structure):
+        _fields_ = [("size", ctypes.c_uint32), ("type", ctypes.c_uint32), ("attr", ctypes.c_uint8)]
+
+    class Param(ctypes.Structure):          # SMCParamStruct, 80 bytes, as AppleSMC's user client expects it
+        _fields_ = [("key", ctypes.c_uint32), ("vers", ctypes.c_uint8 * 6), ("plimit", ctypes.c_uint8 * 16),
+                    ("info", KeyInfo), ("result", ctypes.c_uint8), ("status", ctypes.c_uint8),
+                    ("cmd", ctypes.c_uint8), ("data32", ctypes.c_uint32), ("bytes", ctypes.c_uint8 * 32)]
+
+    try:
+        io = ctypes.cdll.LoadLibrary(ctypes.util.find_library("IOKit"))
+        libc = ctypes.cdll.LoadLibrary(ctypes.util.find_library("c"))
+    except (OSError, TypeError):
+        return None
+    io.IOServiceMatching.restype = ctypes.c_void_p
+    io.IOServiceMatching.argtypes = [ctypes.c_char_p]
+    io.IOServiceGetMatchingService.restype = ctypes.c_uint32
+    io.IOServiceGetMatchingService.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+    io.IOServiceOpen.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_uint32, ctypes.POINTER(ctypes.c_uint32)]
+    io.IOConnectCallStructMethod.argtypes = [ctypes.c_uint32, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_size_t,
+                                             ctypes.c_void_p, ctypes.POINTER(ctypes.c_size_t)]
+    svc = io.IOServiceGetMatchingService(0, io.IOServiceMatching(b"AppleSMC"))
+    conn = ctypes.c_uint32()
+    if not svc or io.IOServiceOpen(svc, ctypes.c_uint32.in_dll(libc, "mach_task_self_").value, 0,
+                                   ctypes.byref(conn)) != 0:
+        return None
+
+    def call(p):
+        out, n = Param(), ctypes.c_size_t(ctypes.sizeof(Param))
+        rc = io.IOConnectCallStructMethod(conn.value, 2, ctypes.byref(p), ctypes.sizeof(Param), ctypes.byref(out),
+                                          ctypes.byref(n))
+        return out if rc == 0 and out.result == 0 else None
+
+    def value(key):
+        p = Param()
+        p.key, p.cmd = struct.unpack(">I", key.encode())[0], 9          # 9: read key info
+        info = call(p)
+        if not info or not info.info.size:
+            return None
+        p.info.size, p.cmd = info.info.size, 5                          # 5: read bytes
+        out = call(p)
+        if not out:
+            return None
+        t, b = struct.pack(">I", info.info.type).decode("ascii", "replace"), bytes(out.bytes[:info.info.size])
+        if t == "sp78":                                                 # signed 7.8 fixed point: temperatures
+            return round(struct.unpack(">h", b[:2])[0] / 256.0, 1)
+        if t == "fpe2":                                                 # unsigned 14.2 fixed point: fan rpm
+            return round(struct.unpack(">H", b[:2])[0] / 4.0)
+        if t.startswith("ui8"):
+            return b[0]
+        return None
+
+    try:
+        temps = {k: v for k, _ in _SMC_TEMPS if (v := value(k)) is not None and 0 < v < 130}
+        fans = [{"rpm": value(f"F{i}Ac"), "min": value(f"F{i}Mn"), "max": value(f"F{i}Mx")}
+                for i in range(int(value("FNum") or 0))]
+    finally:
+        io.IOServiceClose(conn.value)
+    return {"temps": temps, "fans": fans}
+
+
+def _run(argv):
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def mac_battery():
+    """AppleSmartBattery from ioreg -> dict (capacities in mAh, volts, watts, C), or {} on a desktop Mac."""
+    raw = _run(["ioreg", "-rn", "AppleSmartBattery"])
+    def num(k):
+        m = re.search(rf'"{k}" = (-?\d+)', raw)
+        return int(m.group(1)) if m else None
+    if num("DesignCapacity") is None:
+        return {}
+    amps = num("InstantAmperage") if num("InstantAmperage") is not None else num("Amperage")
+    if amps is not None and amps > 2 ** 63:            # some firmware reports a negative current as unsigned 64-bit
+        amps -= 2 ** 64
+    volts = (num("Voltage") or 0) / 1000.0
+    return {"charge": num("CurrentCapacity"), "full": num("MaxCapacity"), "design": num("DesignCapacity"),
+            "cycles": num("CycleCount"), "volts": volts, "watts": abs(volts * (amps or 0) / 1000.0),
+            "charging": (amps or 0) > 0, "ac": re.search(r'"ExternalConnected" = Yes', raw) is not None,
+            "temp": (num("Temperature") or 0) / 100.0 or None}
+
+
+def mac_memory():
+    """RAM in use (wired + active + compressed, as Activity Monitor's 'Memory Used' counts it) and swap, in GB."""
+    vm, ps = _run(["vm_stat"]), 4096
+    m = re.search(r"page size of (\d+)", vm)
+    ps = int(m.group(1)) if m else ps
+    def pages(name):
+        m = re.search(rf"{name}:\s+(\d+)", vm)
+        return int(m.group(1)) if m else 0
+    total = int((_run(["sysctl", "-n", "hw.memsize"]).strip() or 0)) / 1073741824.0
+    used = (pages("Pages wired down") + pages("Pages active") + pages("Pages occupied by compressor")) * ps / 1073741824.0
+    sw = re.search(r"total = ([\d.]+)M\s+used = ([\d.]+)M", _run(["sysctl", "vm.swapusage"]))
+    return {"total": total, "used": used, "swap_total": float(sw.group(1)) / 1024 if sw else 0.0,
+            "swap_used": float(sw.group(2)) / 1024 if sw else 0.0}
+
+
+def mac_browser_mb():
+    """Resident memory of the Gorilla (Firefox) processes in MB: the number the Air's 500 MB budget is about."""
+    total = 0
+    for line in _run(["ps", "-A", "-o", "rss=,comm="]).splitlines():
+        parts = line.split(None, 1)
+        if len(parts) == 2 and re.search(r"(^|/)(firefox|plugin-container)$", parts[1].strip()):
+            total += int(parts[0])
+    return total // 1024 if total else None
+
+
+def mac_cpu_limit():
+    """pmset -g therm: the CPU speed limit macOS applies when hot (100 = none), or None."""
+    m = re.search(r"CPU_Speed_Limit\s*=\s*(\d+)", _run(["pmset", "-g", "therm"]))
+    return int(m.group(1)) if m else None
+
+
+def mac_reading():
+    """Everything the Mac dashboard shows, as plain data (also printed by --json for test harnesses)."""
+    smc = smc_read() or {"temps": {}, "fans": []}
+    t = smc["temps"]
+    die = [t[k] for k in ("TC0D", "TC0E", "TC0F") if k in t]
+    mfc = bool(_run(["pgrep", "-x", "Macs Fan Control"]).strip())
+    st = os.statvfs("/")
+    return {"model": _run(["sysctl", "-n", "hw.model"]).strip(), "smc_ok": bool(smc["temps"]), "temps": t,
+            "cpu_c": t.get("TC0P"), "cpu_die_c": max(die) if die else None, "fans": smc["fans"],
+            "fan_control": "Macs Fan Control" if mfc else "macOS (automatic)", "cpu_limit": mac_cpu_limit(),
+            "battery": mac_battery(), "memory": mac_memory(), "browser_mb": mac_browser_mb(),
+            "load": os.getloadavg(), "threads": os.cpu_count() or 0,
+            "disk_free_gb": st.f_bavail * st.f_frsize / 1073741824.0}
+
+
+def _temp(v, warn=70.0, hot=85.0):
+    if v is None:
+        return "N/A"
+    colour = "\033[91m" if v >= hot else "\033[93m" if v >= warn else "\033[92m"
+    return f"{colour}{v:.1f}°C\033[0m"
+
+
+def build_mac_dashboard(r=None):
+    """The Mac panel. Sized for an 11-inch MacBook Air: a maximised Terminal there is 169 x 33 (SF Mono 13, measured
+    2026-10-23), so both columns stay under 80 columns and the whole panel under 25 rows; the banner is dropped
+    first when the window is shorter than that."""
+    r = r or mac_reading()
+    t = r["temps"]
+    left = ["\033[1m[TEMPERATURES]\033[0m"]
+    if not r["smc_ok"]:
+        left.append("  \033[91mSMC not readable (not an Intel Mac?)\033[0m")
+    names = dict(_SMC_TEMPS)
+    if "TC0P" in t:
+        left.append(f"  {'CPU proximity':<22}: {_temp(t['TC0P'])}")
+    if r["cpu_die_c"] is not None:
+        left.append(f"  {'CPU die (hottest)':<22}: {_temp(r['cpu_die_c'], 80.0, 95.0)}")
+    for k in ("TG0P", "TG0D", "TPCD", "TM0P", "Th0H", "Th1H", "TC0H"):
+        if k in t:
+            left.append(f"  {names[k]:<22}: {_temp(t[k])}")
+    left += ["", "\033[1m[COOLING]\033[0m"]
+    for i, f in enumerate(r["fans"]):
+        span = (f["max"] or 0) - (f["min"] or 0)
+        pct = f" ({100.0 * ((f['rpm'] or 0) - (f['min'] or 0)) / span:.0f}% of range)" if span > 0 else ""
+        left.append(f"  {'Fan' + (f' {i + 1}' if len(r['fans']) > 1 else ''):<22}: \033[94m{f['rpm']} rpm\033[0m"
+                    f"{pct}  min {f['min']}, max {f['max']}")
+    if not r["fans"]:
+        left.append(f"  {'Fan':<22}: N/A")
+    mfc = r["fan_control"] != "macOS (automatic)"
+    left.append(f"  {'Fan controlled by':<22}: " + (f"\033[93m{r['fan_control']}\033[0m" if mfc
+                                                      else f"\033[92m{r['fan_control']}\033[0m"))
+    lim = r["cpu_limit"]
+    left.append(f"  {'CPU speed limit':<22}: " + ("N/A" if lim is None else
+                                                  "\033[92mnone (100%)\033[0m" if lim >= 100 else
+                                                  f"\033[91m{lim}% (macOS is cooling the CPU)\033[0m"))
+
+    b, m = r["battery"], r["memory"]
+    right = ["\033[1m[POWER & BATTERY]\033[0m"]
+    if b:
+        right.append(f"  {'Power source':<22}: \033[97m{'AC adapter' if b['ac'] else 'Battery'}\033[0m")
+        if b["full"]:
+            right.append(f"  {'Charge':<22}: \033[92m{100.0 * b['charge'] / b['full']:.0f}%\033[0m"
+                         f"  ({'charging' if b['charging'] else 'not charging'})")
+        if b["design"]:
+            right.append(f"  {'Battery health':<22}: \033[92m{100.0 * b['full'] / b['design']:.1f}%\033[0m"
+                         f"  ({b['full']} of {b['design']} mAh)")
+        right.append(f"  {'Charge cycles':<22}: {b['cycles']}")
+        right.append(f"  {'Voltage / draw':<22}: {b['volts']:.2f} V / {b['watts']:.1f} W")
+        if b["temp"]:
+            right.append(f"  {'Battery temperature':<22}: {_temp(b['temp'], 40.0, 45.0)}")
+    else:
+        right.append("  No battery (desktop Mac)")
+    right += ["", "\033[1m[LOAD & MEMORY]\033[0m"]
+    pct = 100.0 * m["used"] / m["total"] if m["total"] else 0
+    colour = "\033[91m" if pct >= 90 else "\033[93m" if pct >= 75 else "\033[92m"
+    right.append(f"  {'RAM in use':<22}: {colour}{m['used']:.1f}/{m['total']:.1f} GB ({pct:.0f}%)\033[0m"
+                 f"  swap {m['swap_used']:.1f} GB")
+    bm = r["browser_mb"]
+    right.append(f"  {'Gorilla browser':<22}: " + ("not running" if bm is None else
+                                                  (f"\033[92m{bm} MB\033[0m" if bm <= 500 else f"\033[93m{bm} MB\033[0m")
+                                                  + "  (budget 500 MB)"))
+    ld = r["load"]
+    right.append(f"  {'Load (1/5/15 min)':<22}: {ld[0]:.1f} {ld[1]:.1f} {ld[2]:.1f}  ({r['threads']} threads)")
+    right.append(f"  {'Disk free':<22}: {r['disk_free_gb']:.1f} GB")
+
+    cols, rows = (os.get_terminal_size() if sys.stdout.isatty() else (10 ** 6, 10 ** 6))
+    lw = max(_vis_len(l) for l in left)
+    rw = max(_vis_len(l) for l in right)
+    if cols >= lw + 3 + rw:
+        body, width = _two_columns(left, right, 3), lw + 3 + rw
+    else:
+        body, width = left + [""] + right, max(lw, rw)
+    width = min(width, cols)
+    label = f"{(r['model'] or 'MAC').upper()} GORILLA SYSTEM DASHBOARD"
+    ver, _ = _own_version()
+    if ver:
+        label += f"   v{ver}"
+    sep = "\033[1;36m" + "=" * width + "\033[0m"
+    head = [sep, "\033[1;36m" + label.center(width) + "\033[0m", sep]
+    if len(head) + len(body) + 2 > rows:
+        # A default 80x24 Terminal stacks the columns and would scroll: drop the blank lines and the title's frame
+        # rather than lose a reading off the top of the screen.
+        body = [l for l in body if l.strip()]
+        head = ["\033[1;36m" + label.center(width) + "\033[0m"]
+        return "\n".join(head + body)
+    logo_w = max(len(l) for l in _LOGO_RAW)
+    # 1 line is left for the live view's own footer. The banner goes first when it does not fit (height is the
+    # budget that breaks on an 11-inch screen), and only shows when the window is wide enough for it.
+    if width >= logo_w and len(body) + len(head) + 1 + 3 + 1 <= rows:
+        head = [" " * ((width - logo_w) // 2) + l for l in get_skynet_logo_lines()] + head
+    return "\n".join(head + body + [sep])
+
+
 def build_dashboard():
+    if sys.platform == "darwin":
+        return build_mac_dashboard()
     # 1. CPU temps
     cpu_temps = get_cpu_temps()
     
@@ -703,8 +961,16 @@ def main():
     parser.add_argument("-w", "--watch", action="store_true",
                         help="live view (now the default; kept so existing "
                              "commands and muscle memory keep working)")
+    parser.add_argument("--json", action="store_true",
+                        help="macOS: print one reading as JSON and exit (for test harnesses)")
     parser.add_argument("-n", "--interval", type=float, default=2.0, help="Refresh interval in seconds (default: 2.0)")
     args = parser.parse_args()
+    if args.json:
+        if sys.platform != "darwin":
+            sys.exit("--json is the macOS reader; on Linux use the dashboard")
+        import json
+        print(json.dumps(mac_reading()))
+        return
 
     # Live is the default (owner decision 2026-08-13). A one-shot print cannot
     # reflow when the window is resized - the text is already in the scrollback
