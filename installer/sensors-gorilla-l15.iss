@@ -1,5 +1,5 @@
 #define AppName "sensors.gorilla (ThinkPad L15 Gen 3)"
-#define AppVersion "3.0.0"
+#define AppVersion "3.0.1"
 #define AppExe "sensors-gorilla-l15.exe"
 #define AppPublisher "Gorilla System Tools"
 #define AppURL "https://github.com/gorillanobakaa-dot/sensors-gorilla"
