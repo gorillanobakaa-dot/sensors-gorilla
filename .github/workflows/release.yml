@@ -22,7 +22,7 @@ jobs:
       - name: Fetch and SHA-256 verify PawnIO 0.2.12 modules
         shell: pwsh
         run: .\scripts\fetch_pawnio_modules.ps1
-      - name: Build Inno Setup click-to-install installers
+      - name: Build Inno Setup click-to-install installers (with 256px Gorilla icon)
         shell: pwsh
         run: |
           $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -59,13 +59,30 @@ jobs:
       - run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
       - run: cargo build --release --offline --locked --target x86_64-apple-darwin
       - run: cargo build --release --offline --locked --target aarch64-apple-darwin
-      - name: Create universal macOS binary (Intel x86_64 + Apple Silicon arm64)
+      - name: Create universal binary, .icns icon (up to 1024px), and sensors.gorilla.app bundle
         run: |
-          mkdir -p dist
+          mkdir -p dist AppIcon.iconset
           lipo -create -output dist/sensors-gorilla-macos-universal \
             target/x86_64-apple-darwin/release/sensors-gorilla \
             target/aarch64-apple-darwin/release/sensors-gorilla
           cp target/x86_64-apple-darwin/release/sensors-gorilla dist/sensors-gorilla-macos-x86_64
+          sips -z 16 16     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_16x16.png >/dev/null
+          sips -z 32 32     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_16x16@2x.png >/dev/null
+          sips -z 32 32     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_32x32.png >/dev/null
+          sips -z 64 64     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_32x32@2x.png >/dev/null
+          sips -z 128 128   assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_128x128.png >/dev/null
+          cp assets/icons/sensors-gorilla-256.png                      AppIcon.iconset/icon_128x128@2x.png
+          cp assets/icons/sensors-gorilla-256.png                      AppIcon.iconset/icon_256x256.png
+          cp assets/icons/sensors-gorilla-512.png                      AppIcon.iconset/icon_256x256@2x.png
+          cp assets/icons/sensors-gorilla-512.png                      AppIcon.iconset/icon_512x512.png
+          cp assets/icons/sensors-gorilla-1024.png                     AppIcon.iconset/icon_512x512@2x.png
+          iconutil -c icns AppIcon.iconset -o dist/sensors-gorilla.icns
+          mkdir -p "dist/sensors.gorilla.app/Contents/MacOS" "dist/sensors.gorilla.app/Contents/Resources"
+          cp dist/sensors-gorilla-macos-universal "dist/sensors.gorilla.app/Contents/MacOS/sensors-gorilla"
+          cp dist/sensors-gorilla.icns "dist/sensors.gorilla.app/Contents/Resources/AppIcon.icns"
+          cp assets/macos/Info.plist "dist/sensors.gorilla.app/Contents/Info.plist"
+          (cd dist && zip -r sensors-gorilla-macos-app.zip sensors.gorilla.app)
+          rm -rf dist/sensors.gorilla.app
       - uses: actions/upload-artifact@v4
         with:
           name: macos
@@ -94,6 +111,8 @@ jobs:
           cp linux/thermal-profile-daemon out/thermal-profile-daemon-linux-x86_64
           cp macos/sensors-gorilla-macos-x86_64 out/sensors-gorilla-macos-x86_64
           cp macos/sensors-gorilla-macos-universal out/sensors-gorilla-macos-universal
+          cp macos/sensors-gorilla-macos-app.zip out/sensors-gorilla-macos-app.zip
+          cp assets/icons/sensors-gorilla-512.png out/sensors-gorilla-512.png
           cp recreate_success.sh out/recreate_success.sh
           cp thermal-profile-daemon.README.md out/thermal-profile-daemon.README.md
           chmod +x out/sensors-gorilla-linux-x86_64 out/thermal-profile-daemon-linux-x86_64 out/sensors-gorilla-macos-x86_64 out/sensors-gorilla-macos-universal out/recreate_success.sh
