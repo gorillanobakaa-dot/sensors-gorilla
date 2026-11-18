@@ -1,0 +1,103 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  test:
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo test --release --offline --locked
+
+  windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo build --release --offline --locked --target x86_64-pc-windows-msvc
+      - name: Fetch and SHA-256 verify PawnIO 0.2.12 modules
+        shell: pwsh
+        run: .\scripts\fetch_pawnio_modules.ps1
+      - name: Build Inno Setup click-to-install installers
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
+          & $iscc installer\sensors-gorilla-generic.iss
+          & $iscc installer\sensors-gorilla-l15.iss
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            target/x86_64-pc-windows-msvc/release/sensors-gorilla.exe
+            target/x86_64-pc-windows-msvc/release/sensors-gorilla-l15.exe
+            installer/output/*.exe
+
+  linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: cargo build --release --offline --locked --target x86_64-unknown-linux-musl
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            target/x86_64-unknown-linux-musl/release/sensors-gorilla
+            target/x86_64-unknown-linux-musl/release/thermal-profile-daemon
+
+  macos:
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup target add x86_64-apple-darwin aarch64-apple-darwin
+      - run: cargo build --release --offline --locked --target x86_64-apple-darwin
+      - run: cargo build --release --offline --locked --target aarch64-apple-darwin
+      - name: Create universal macOS binary (Intel x86_64 + Apple Silicon arm64)
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/sensors-gorilla-macos-universal \
+            target/x86_64-apple-darwin/release/sensors-gorilla \
+            target/aarch64-apple-darwin/release/sensors-gorilla
+          cp target/x86_64-apple-darwin/release/sensors-gorilla dist/sensors-gorilla-macos-x86_64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*
+
+  publish:
+    needs: [windows, linux, macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify version matches tag and release page exists
+        run: |
+          v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$v" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml $v"; exit 1; }
+          test -s "releases/$GITHUB_REF_NAME.md" || { echo "releases/$GITHUB_REF_NAME.md missing"; exit 1; }
+      - uses: actions/download-artifact@v4
+      - name: Assemble all OS release assets and SHA256SUMS
+        run: |
+          mkdir out
+          cp windows/sensors-gorilla.exe out/sensors-gorilla-windows-generic-x86_64.exe
+          cp windows/sensors-gorilla-l15.exe out/sensors-gorilla-windows-thinkpad-l15-x86_64.exe
+          cp windows/*installer.exe out/
+          cp linux/sensors-gorilla out/sensors-gorilla-linux-x86_64
+          cp linux/thermal-profile-daemon out/thermal-profile-daemon-linux-x86_64
+          cp macos/sensors-gorilla-macos-x86_64 out/sensors-gorilla-macos-x86_64
+          cp macos/sensors-gorilla-macos-universal out/sensors-gorilla-macos-universal
+          cp recreate_success.sh out/recreate_success.sh
+          cp thermal-profile-daemon.README.md out/thermal-profile-daemon.README.md
+          chmod +x out/sensors-gorilla-linux-x86_64 out/thermal-profile-daemon-linux-x86_64 out/sensors-gorilla-macos-x86_64 out/sensors-gorilla-macos-universal out/recreate_success.sh
+          cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "sensors.gorilla $GITHUB_REF_NAME" --notes-file "releases/$GITHUB_REF_NAME.md"

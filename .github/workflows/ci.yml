@@ -1,0 +1,45 @@
+name: ci
+on:
+  push:
+  pull_request:
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust target
+        run: rustup target add ${{ matrix.target }}
+      - name: Run unit tests
+        run: cargo test --release --offline --locked
+      - name: Build release binaries (zero on-the-fly compilation)
+        run: cargo build --release --offline --locked --target ${{ matrix.target }}
+      - name: Smoke-test native binaries
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/sensors-gorilla"
+          [ "${{ runner.os }}" = "Windows" ] && BIN="${BIN}.exe"
+          "$BIN" --version
+          "$BIN" --once >/dev/null
+          "$BIN" --json >/dev/null
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            "target/${{ matrix.target }}/release/sensors-gorilla-l15.exe" --version
+            "target/${{ matrix.target }}/release/sensors-gorilla-l15.exe" --once --no-ec >/dev/null
+            "target/${{ matrix.target }}/release/sensors-gorilla-l15.exe" --json --no-ec >/dev/null
+          fi
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            "target/${{ matrix.target }}/release/thermal-profile-daemon" --version
+            bash -n recreate_success.sh
+          fi

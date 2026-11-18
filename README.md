@@ -1,4 +1,4 @@
-<!-- Version: 2.2.0 · updated 26-10-23-16-40 -->
+<!-- Version: 3.0.0 · updated 26-11-18-02-45 -->
 # sensors.gorilla 🦍
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->
@@ -12,19 +12,12 @@ Why, with the numbers: [PHILOSOPHY.md](https://github.com/gorillanobakaa-dot/Gor
 
 <!-- /WHO-THIS-IS-FOR -->
 
-> *A zero-dependency Python 3 terminal dashboard that maps every readable
-> hardware sensor on a Sony VAIO SVE14A3AJ — and any similar Linux machine —
-> into one live, colour-coded readout that follows the window as you resize it.*
+> *A zero-dependency, native compiled terminal hardware dashboard for
+> **Windows (Generic + ThinkPad L15 Gen 3)**, **Linux (Sony VAIO SVE14 & x86_64)**,
+> and **macOS (Intel & Apple Silicon)** — using full 24-bit TrueColor (16.7M colors)
+> and reflowing instantaneously as you resize the terminal window.*
 
-[![sensors.gorilla v2.1.0 running live in a 176-column terminal on a 1600x900 screen during a Firefox compile: the Skynet banner; temperatures, cooling, RAPL wattage, throttle status and battery on the left; SSD health, lifetime projections and the new load, memory and Sony controls section on the right, with 6.3 GB in swap and a load of 10.2 on 8 threads](dashboard.png)](dashboard.png)
-
-*v2.1.0 in a 176-column terminal, mid-compile. Click for full resolution. The footer reports
-the live column count, so you can see the layout tracking the window.*
-
-[![sensors.gorilla v2.2.0 live on a 2011 MacBook Air 4,1 (macOS 10.13 High Sierra, 11-inch 1366x768 screen) in a maximised 169-column Terminal, with Macs Fan Control switched off: CPU proximity 47.9 C and die 55.6 C, the fan at 2026 rpm under macOS's own control, no CPU speed limit, battery health 79.7% after 99 cycles, 2.4 of 4.0 GB RAM in use; the whole panel takes 20 of the window's 40 rows](dashboard-macbook-air.png)](dashboard-macbook-air.png)
-
-*v2.2.0 on a 2011 MacBook Air (macOS 10.13), the 11-inch screen. Same command, no password, nothing
-installed: the Mac's sensors are read from its SMC chip through macOS's own IOKit.*
+All operating systems and installers are published together on the single [Latest Release](https://github.com/gorillanobakaa-dot/sensors-gorilla/releases/latest) page.
 
 ---
 
@@ -32,277 +25,65 @@ installed: the Mac's sensors are read from its SMC chip through macOS's own IOKi
 
 ### What does this do?
 
-Imagine your laptop had a health panel — like a car dashboard — that told you everything happening inside it in real time: how hot the CPU is, how the fan is coping, how healthy the battery still is, how much life your SSD has left, and how long it will last under different usage styles.
+Imagine your laptop had a health panel — like a car dashboard — that told you everything happening inside it in real time: how hot every CPU core is, how fast the fan is spinning, how healthy the battery still is compared to brand new, how much life your SSD has left, and how long it will last under different usage styles.
 
-That is exactly what `sensors.gorilla` is.
+Run one command in the terminal and you get a live, flicker-free, 24-bit TrueColor dashboard showing:
 
-Run one command in the terminal and you get a full-screen dashboard showing:
+- 🌡️ **Temperatures** — CPU Package, every individual Core (including P-Cores & E-Cores on 12th Gen+ Intel), Motherboard / PCH Chipset, Integrated & Discrete GPU, NVMe/SATA SSDs, and ACPI thermal zones
+- 💨 **Fan speed & cooling** — ThinkPad EC Fan RPM & BIOS mode (L15), Mac SMC Fan RPM, Sony VAIO fan %, plus active throttling flags
+- ⚡ **Silicon power & clocks** — Live CPU Package / Core / Uncore-GPU wattage (RAPL) and live per-cluster boost frequencies
+- 🔋 **Battery health** — Current charge %, voltage, live charge/discharge wattage, wear level % (actual capacity vs brand-new design), and charge cycle count
+- 💾 **SSD health and lifetime** — Real-world years-to-go under Light, Developer Hardcore, and Enterprise workloads from live NVMe/SATA SMART wear & TBW counters
+- 🧠 **Memory, GPU & Load** — RAM and pagefile/commit/swap usage with smooth TrueColor gradient bars, GPU VRAM & 3D/Video Decode/Encode utilization, active power plan
 
-- 🌡️ **Temperatures** — Every CPU core, the motherboard chipset, the integrated GPU, and the SSD drive
-- 💨 **Fan speed** — What percentage the fan is running at right now
-- 🔋 **Battery health** — Not just "how charged is it", but *how worn out is the battery itself* compared to when it was brand new (in %). Plus how many times it has been charged (cycle count)
-- 💾 **SSD health and lifetime** — How much life the Kingston Enterprise SSD has left, displayed as years-to-go under realistic usage scenarios:
-  - *"If you just browse the web and watch YouTube, this drive will last 1,918 years"*
-  - *"If you compile Firefox from scratch every single day, it will last 160 years"*
-  - *"If you run it at full enterprise blast (1 full overwrite per day as Kingston designed it for), it lasts 5 years"*
-- 🧠 **Load and memory** — How much RAM and swap is in use, how busy the processor is, whether turbo is on, and whether the kernel itself is holding the CPU back to cool it
-- 🎛️ **Sony controls** — What the laptop's own firmware switches are set to: forced fan, USB charging while off, waking when the lid opens, the touchpad
+### Two Windows Editions
 
-Across the top: a **Gorilla Skynet System** banner made of glowing letters in fire colours (cyan → orange → red) rendered entirely in text characters — no images, just Unicode. Below it the data is laid out in **two columns** — temperatures, cooling and power on the left, storage health on the right — so the whole dashboard fits a maximized window without scrolling.
-
-It **follows the window**. Resize the terminal and the dashboard re-lays itself out straight away: two columns when there is room, two columns with the workload descriptions dropped when it is a little tight, and a single stacked column when it is genuinely narrow. Whenever it is not showing you the full layout it says so, and says what width it would need — so a cramped dashboard never looks like a broken one.
-
-**Companion tool:** [`thermal-profile-daemon`](./thermal-profile-daemon.README.md) — a zero-dependency background service that automatically steps the Sony fan profile (silent/balanced/performance) with CPU temperature, since nothing else on Linux ever touches that knob. The dashboard's `[SYSTEM COOLING]` section shows whether it is running.
-
-### How was it built?
-
-All sensor data is read directly from Linux kernel files (`/sys` filesystem) — the same files the `sensors` command reads. The SSD data comes from the industry-standard `smartctl` tool that queries the drive's built-in health counters (called SMART attributes). No internet connection needed. No cloud. No tracking. Everything runs locally.
-
-The SSD lifespan maths uses the drive manufacturer's (Kingston) official rated endurance of **3,504 Terabytes Written** and compares it to how many bytes have actually been written to the drive so far.
+1. **Generic Windows (`sensors-gorilla.exe`)** — Works out of the box on any Windows 10 or Windows 11 PC (Intel, AMD, NVIDIA, laptop, or desktop). Zero drivers or Python needed.
+2. **ThinkPad L15 Gen 3 Edition (`sensors-gorilla-l15.exe`)** — Tailored specifically for the Lenovo ThinkPad L15 Gen 3 (`21C3CTO1WW`, 12th Gen Intel Core i7-1255U 2P+8E hybrid CPU, Intel Iris Xe 96 EU, Micron 1TB PCIe Gen4 NVMe): separates P-core and E-core clocks/temps, reads the Lenovo Hardware Odometer, and (when run elevated with the signed PawnIO driver) reveals per-core die temps, RAPL watts, PCH temp, and ThinkPad EC Fan RPM read-only without any TPFanControl code.
 
 ---
 
 ## 💻 Section B — For the Developer
 
-### Requirements
+### Compiled Native Binaries (Zero On-the-Fly Compilation)
 
-**On an Intel Mac** (added 2.2.0, tested on a MacBook Air 4,1 with macOS 10.13.6):
+All four platform targets are compiled from **zero-dependency Rust (`std` only, empty `[dependencies]` in `Cargo.toml`)** with `opt-level = 3`, `lto = true`, `strip = true`:
 
-- Python 3 (macOS 10.13 has none: the python.org installer puts it in `/usr/local/bin/python3`)
-- Nothing else. No Homebrew, no Xcode, no password. Temperatures and fans come from the SMC (System
-  Management Controller), which macOS lets any user read; battery from `ioreg`, memory from `vm_stat`,
-  the CPU speed limit from `pmset -g therm`.
-- Sized for the 11-inch screen: a maximised Terminal there is 169 x 33 to 40 rows. The panel is 20 rows
-  and 126 columns; at 80 x 24 it stacks into one column of 23 rows. The banner goes first when the
-  window is too short.
-- `--json` prints one reading as JSON, for test scripts (the Gorilla browser heat tests use it).
-- Apple Silicon Macs are untested.
+| Target | Artifact | Notes |
+|---|---|---|
+| Windows Generic x64 | `sensors-gorilla-windows-generic-x86_64.exe` + `.installer.exe` | Static CRT (`+crt-static`), Win32 IOCTL / PDH / COM WMI / NVML / optional HWiNFO/LHM/PawnIO |
+| Windows ThinkPad L15 Gen 3 | `sensors-gorilla-windows-thinkpad-l15-x86_64.exe` + `.installer.exe` | Static CRT, Alder Lake 2P+8E split, Lenovo Odometer, SHA-256 verified read-only PawnIO MSR/PCH/ThinkPad EC |
+| Linux x86_64 | `sensors-gorilla-linux-x86_64` + `thermal-profile-daemon-linux-x86_64` | Static `x86_64-unknown-linux-musl` ELF, `hwmon`/`coretemp`/`k10temp`/`amdgpu`/RAPL/`smartctl`/`sony-laptop` |
+| macOS (Intel & Apple Silicon) | `sensors-gorilla-macos-universal` + `sensors-gorilla-macos-x86_64` | Direct `IOKit` `AppleSMC` FFI + `ioreg` + `vm_stat` + `pmset` + Apple Terminal 256-color fallback |
 
-**On Linux:**
+### Windows Terminal 24-bit TrueColor & Instant Resize
 
-- Python 3 (stdlib only — `glob`, `os`, `subprocess`, `re`, `time`, `argparse`)
-- `smartmontools` (`sudo apt install smartmontools`) — for SMART attribute reads via `sudo smartctl -A /dev/sda`
-- Linux kernel with `coretemp`, `acpitz`, `sony-laptop` modules loaded (standard on VAIO SVE14A3AJ)
-- **Terminal width.** The layout degrades in steps rather than falling off a
-  cliff, and says which step it is on. Measured on the reference machine:
-
-  | Your terminal | What you get |
-  |---|---|
-  | 173 columns or more | Two columns, workload descriptions shown |
-  | 158–172 | Two columns, descriptions hidden (it says so) |
-  | 90–157 | Single stacked column (it says so, and why) |
-  | under ~82 | The panels themselves are wider than the screen; nothing to be done |
-
-### Resizing the window
-
-A new terminal on Debian opens small, so the first run in a fresh window will
-often stack. **Maximising afterwards will not reflow that output** — it is
-already printed, and no program can reach back into your scrollback and rewrap
-text it has already written. `ls` and `git log` behave the same way.
-
-**Since 2.0 this is handled for you: the dashboard is live by default.**
-
-```bash
-sensors.gorilla           # live, follows the window
-sensors.gorilla --once    # one snapshot then exit (the pre-2.0 behaviour)
-sensors.gorilla -n 5      # refresh every 5 seconds
-```
-
-It listens for `SIGWINCH` — the signal the terminal sends the instant you
-resize — and redraws immediately rather than waiting for the next tick.
-Measured: with a 5-second refresh interval, a maximise redraws in **0.8s**. The
-footer shows the current column count so you can see it tracking.
-
-**Piping and redirection are unaffected.** When output is not a terminal it
-always prints once and exits, so `sensors.gorilla > report.txt`, pipelines and
-cron jobs behave exactly as before — a live default that hung a shell script
-would be a worse bug than the one it fixed.
-
-  Those numbers are computed at runtime, not hardcoded — they shift as panel
-  content changes. Check your width with `tput cols`. A maximized terminal on a
-  1600×900 screen is roughly 176 columns, which clears the full layout, but only
-  just: earlier versions required 173 with no fallback in between, so a scrollbar
-  or a slightly wider font silently cost you the second column.
-
-### Installation
-
-```bash
-./recreate_success.sh
-```
-
-Installs to `~/.local/bin`, verifies the installed file matches the source, and
-warns if that directory is not on your `PATH`. Two other modes:
-
-```bash
-./recreate_success.sh --link    # symlink instead of copy — for developing
-./recreate_success.sh --check   # is what is installed still in sync?
-```
-
-`--link` exists because a copy drifts. Three copies of this script once ended up
-on one machine at two different revisions, with the documentation describing a
-third; the afternoon that cost is why `--check` exists at all.
+- Enables `ENABLE_VIRTUAL_TERMINAL_PROCESSING` and UTF-8 (`CP_UTF8`) via `SetConsoleMode` / `SetConsoleOutputCP`.
+- Uses synchronized output (`\x1b[?2026h` ... `\x1b[?2026l`) for tear-free live redraws.
+- Continuous RGB interpolation (`\x1b[38;2;R;G;Bm`) across thermal, load, wear, and power scales plus gradient progress bars and separator rules.
+- Wakes immediately on `WINDOW_BUFFER_SIZE_EVENT` (`WaitForSingleObject` on `STD_INPUT_HANDLE`) on Windows, and `SIGWINCH` self-pipe `poll()` on Linux/macOS.
 
 ### Usage
 
+```powershell
+sensors-gorilla            # Live 24-bit TrueColor dashboard (follows window resize)
+sensors-gorilla --once     # One snapshot, then exit
+sensors-gorilla --json     # JSON telemetry snapshot (for scripts & harnesses)
+sensors-gorilla -n 5       # Refresh every 5 seconds
+sensors-gorilla-l15 --no-ec  # L15 build skipping EC sideband probe
+```
+
+### Build Offline From Source
+
 ```bash
-sensors.gorilla           # live dashboard, follows the window (the default)
-sensors.gorilla --once    # one snapshot, then exit
-sensors.gorilla -n 5      # live, refresh every 5 seconds
-sensors.gorilla --version # version and the date it was last changed
+cargo test --release --offline --locked
+cargo build --release --offline --locked
 ```
 
-**Live is the default since 2.0.** A printed snapshot cannot reflow when you
-resize the terminal — the text is already in your scrollback — so the old
-default left a stale single-column layout on screen after maximising, with no
-way to fix it but re-running. The live view listens for `SIGWINCH` and re-lays
-out immediately.
+On Windows, verify and stage optional PawnIO 0.2.12 modules (checked against `pawnio/modules.sha256` before loading) and build Inno Setup installers:
 
-**Redirection and pipes are unaffected.** When output is not a terminal it always
-prints once and exits, so `sensors.gorilla > report.txt`, shell pipelines and
-cron jobs behave exactly as before. A live default that hung a script would be a
-worse bug than the one it fixed.
-
-### Versioning
-
-Every file here carries its version and the time it last changed, in the header
-and — for the script — on the dashboard itself:
-
+```powershell
+.\scripts\fetch_pawnio_modules.ps1
+ISCC.exe installer\sensors-gorilla-generic.iss
+ISCC.exe installer\sensors-gorilla-l15.iss
 ```
-SONY VAIO GORILLA SYSTEM DASHBOARD   v2.0.0 · 26-08-13-20-02
-```
-
-The script reads that stamp out of its own header at runtime rather than keeping
-a separate constant, so the number on screen cannot drift from the file. A
-version you can only see by opening the file does not tell you which build you
-are looking at, which is the entire point of having one.
-
-### Sensor Sources (Complete Map)
-
-| Sensor | sysfs / tool path | SMART attr |
-|---|---|---|
-| CPU Package Peak | `/sys/.../coretemp/temp1_input` | — |
-| CPU Core 0–3 | `/sys/.../coretemp/temp2–5_input` | — |
-| Motherboard (acpitz) | `/sys/class/hwmon/hwmon1/temp1_input` | — |
-| Intel HD 4000 | Shared CPU package die | — |
-| AMD Radeon Turks | `/sys/class/hwmon/hwmon*/name` (amdgpu scan) | — |
-| SSD Temperature | `smartctl -A /dev/sda` | attr 194 RAW |
-| SSD Health | `smartctl -A /dev/sda` | attr 231 VALUE |
-| SSD Lifetime Writes | `smartctl -A /dev/sda` | attr 241 RAW × 32 MB |
-| SSD Power-On Hours | `smartctl -A /dev/sda` | attr 9 RAW |
-| CPU Package Power | `/sys/class/powercap/intel-rapl:0/energy_uj` (2 samples ÷ Δt, via sudo) | — |
-| CPU cores / uncore Power | `intel-rapl:0:0` + `intel-rapl:0:1` energy counters | — |
-| CPU Frequency | max of `/sys/devices/system/cpu/cpu*/cpufreq/scaling_cur_freq` | — |
-| Intel GPU Frequency | `/sys/class/drm/card*/gt_cur_freq_mhz` (+ `gt_max_`) | — |
-| Thermal Throttle Events | `/sys/devices/system/cpu/cpu*/thermal_throttle/*` | — |
-| Fan Speed | `/sys/devices/platform/sony-laptop/fanspeed` | — |
-| Thermal Profile | `/sys/devices/platform/sony-laptop/thermal_control` | — |
-| AC Online | `/sys/class/power_supply/ADP1/online` | — |
-| Battery Charge % | `/sys/class/power_supply/BAT0/capacity` | — |
-| Battery Status | `/sys/class/power_supply/BAT0/status` | — |
-| Battery Voltage | `/sys/class/hwmon/hwmon2/in0_input` ÷ 1000 | — |
-| Power Draw | `/sys/class/hwmon/hwmon2/power1_input` ÷ 1,000,000 | — |
-| Battery Wear | `BAT0/energy_full` ÷ `BAT0/energy_full_design` | — |
-| Cycle Count | `/sys/class/power_supply/BAT0/cycle_count` | — |
-| Sony Care Limiter | `/sys/devices/platform/sony-laptop/battery_care_limiter` | — |
-| Sony Care Health | `/sys/devices/platform/sony-laptop/battery_care_health` | — |
-| RAM / Swap | `/proc/meminfo` (MemTotal, MemAvailable, SwapTotal, SwapFree) | — |
-| Load | `os.getloadavg()` against the CPU thread count | — |
-| Turbo / Governor | `/sys/devices/system/cpu/intel_pstate/no_turbo`, `cpu0/cpufreq/scaling_governor` | — |
-| Kernel Cooling | `/sys/class/thermal/cooling_device*/{type,cur_state,max_state}` (Processor, intel_powerclamp) | — |
-| Sony Controls | `/sys/devices/platform/sony-laptop/{fan_forced,usb_charge,lid_resume_S5,touchpad}` | — |
-
-### SSD Lifespan Calculation
-
-```python
-TBW_TOTAL_GB = 3_504_000.0          # Kingston DC600M 1.92TB rated endurance
-written_gb   = attr_241_raw * 32 / 1024
-remaining_gb = TBW_TOTAL_GB - written_gb
-years        = remaining_gb / gb_per_day / 365.25
-```
-
-Rendered across 10 profiles in 3 categories (Normal / Developer Hardcore / Enterprise).
-
-### Logo Architecture
-
-```
-get_skynet_logo_lines()
-  └── _LOGO_RAW[]           — 3 hand-crafted thin box-drawing strings (one banner row)
-  └── _fire_colour(x, w)    — maps column position → (R, G, B) on cyan→orange→red arc
-  └── \033[1;38;2;R;G;Bm    — true-colour bold ANSI per character
-```
-
-Banner is 79 columns wide, centred over the dashboard — the width is measured at runtime (`logo_w`), never assumed. No PIL. No pyfiglet. No external dependencies.
-
-### Architecture Overview
-
-```
-sensors.gorilla
-├── get_file_val()          — safe sysfs file reader with scale + default
-├── get_cpu_temps()         — coretemp hwmon scanner
-├── get_amd_gpu_temp()      — hwmon name-scan for amdgpu/radeon
-├── get_battery_health()    — BAT0 + sony-laptop sysfs
-├── get_ssd_metrics()       — smartctl subprocess parser
-├── _fire_colour(x, width)  — gradient math
-├── get_skynet_logo_lines() — ANSI-painted logo renderer
-├── _two_columns()          — ANSI-aware two-column zip (width-adaptive)
-└── build_dashboard()       — banner + two-column assembly, stacked fallback
-```
-
-### Changelog
-
-**2.2.0 (2026-10-23)**
-
-- **Intel Macs.** A macOS side: temperatures and fans from the SMC through IOKit (ctypes, standard
-  library only), battery health and cycles, RAM in use as Activity Monitor counts it, the CPU speed
-  limit macOS applies when hot, who controls the fan (macOS or Macs Fan Control), and the Gorilla
-  browser's own memory against its 500 MB budget. Born because browser heat tests on the MacBook Air
-  must run with Macs Fan Control off, and the only reading until then was that app's menu-bar text.
-- **256 colours in Apple's Terminal.** macOS Terminal up to 10.15 has no 24-bit colour and painted
-  blocks across the banner; it now gets the nearest of the 216 standard colours.
-
-**2.1.0 — 2026-10-15**
-
-- **What a compile presses on.** One new section, `[LOAD, MEMORY & SONY CONTROLS]`: RAM and swap,
-  load against the thread count, turbo and the frequency governor, the kernel's own cooling
-  (passive Processor states and `intel_powerclamp`, a throttle the MSR counters do not show), and
-  the `sony-laptop` switches. The first reading, mid-way through a Firefox build, showed 6 GB in
-  swap. Four lines in the right column, so the dashboard grows by three lines (35 to 38) and still
-  fits a 1600×900 screen at 174 columns.
-
-**2.0.0 — 2026-08-13**
-
-- **Live by default.** A printed snapshot cannot reflow on resize, so the
-  default that left a stale layout on screen was the wrong one. `--once`
-  restores the old behaviour. Non-tty output still prints once and exits.
-- **Follows the window.** Watch mode listens for `SIGWINCH` and redraws
-  immediately instead of waiting for the next tick. Measured: a maximise
-  redraws in 0.8s with a 5-second refresh interval. The wait is a `select()`
-  on a self-pipe, not `time.sleep()` — since PEP 475 a bare sleep is *resumed*
-  after a signal rather than returning, so the redraw would still have been
-  late.
-- **Layout degrades in steps, not off a cliff.** It previously needed 173
-  columns with nothing in between; a maximised terminal on the reference
-  1600×900 screen is 176, so it cleared that by three columns and any
-  scrollbar or font change silently cost you the second column. It now drops
-  the workload descriptions first (158 columns), and only then stacks.
-- **It says which step it is on**, and what width the next one needs. Silent
-  degradation is what made a narrow terminal look like an old build.
-- **Version on the dashboard**, read from the file's own header stamp at
-  runtime. Plus `--version`.
-- **Installer verifies the artifact** and gained `--link` and `--check`, because
-  copies drift.
-
-### Notes
-
-- AMD Radeon Turks is disabled in BIOS on this machine → cleanly shows `OFF (Disabled in BIOS)`
-- Intel HD 4000 temperature = CPU Package Peak (shared die, no separate sensor)
-- `BAT0/cycle_count` may return `0` on some VAIO BIOSes (counter not exposed by ACPI)
-- SSD lifespan projections do not account for Write Amplification Factor (WAF ≈ 1.5–3×)
-- `sudo` is required for `smartctl` — script will show `N/A` if permission denied
-- `sudo` is also required for RAPL power (`energy_uj` is root-only since kernel 5.10); shows `N/A` without it
-- RAPL wattage is measured over a 0.25 s sample window, adding ~0.5 s to each render
-- The board has no other sensor silicon: DMI declares zero temperature/current probes, the DDR3 SODIMMs carry no thermal sensor, and the Wi-Fi driver exposes no hwmon (verified with dmidecode/i2cdetect/lm-sensors, 2026-08-12)
-
----
-
-*Built on a Sony VAIO SVE14A3AJ (Intel i7-3632QM, 16GB RAM, Kingston DC600M 1.92TB Enterprise SSD) running Debian Linux.*

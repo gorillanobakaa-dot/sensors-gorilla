@@ -1,86 +1,59 @@
 #!/bin/bash
-# Version: 2.0.0 · updated 26-08-13-20-10
-# install.sh for sensors.gorilla — put it on your PATH.
-#
-# TWO MODES, AND THE REASON THERE ARE TWO
-#   Default is a COPY. That is the right thing for anyone who clones this repo:
-#   the installed command keeps working even if they delete the clone.
-#
-#   --link installs a SYMLINK instead, for whoever is actually developing the
-#   script. A copy silently drifts from its source — on the author's machine
-#   three copies of this tool ended up at two different revisions, with the
-#   documentation describing a third, and an afternoon went to diagnosing a
-#   layout that was never broken. A symlink cannot drift.
-#
-#   Either way --check tells you whether what is installed matches this repo.
-#
-# USAGE
-#   ./recreate_success.sh          install a copy
-#   ./recreate_success.sh --link   install a symlink (for developing)
-#   ./recreate_success.sh --check  compare installed against this repo
-
+# Version: 3.0.0 · updated 26-11-18-02-45
+# Install sensors.gorilla on Linux or macOS without on-the-fly compilation.
+# Prefers the compiled native binary (from release download or `cargo build --release --offline --locked`),
+# and if installing the Python fallback, precompiles bytecode (.pyc) ahead of time.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="$HERE/sensors.gorilla"
 INSTALL_DIR="$HOME/.local/bin"
 DEST="$INSTALL_DIR/sensors.gorilla"
-
-# Anchor to the source, never assume it: if the script is missing, say so and
-# stop, rather than installing nothing and reporting success.
-[ -f "$SRC" ] || { echo "error: $SRC not found — run this from the repo." >&2; exit 1; }
-
-version_of () { sed -n 's/^# Version: \([^ ]*\).*/\1/p' "$1" 2>/dev/null | head -1; }
-
-case "${1:-copy}" in
-  --check)
-      if [ ! -e "$DEST" ]; then
-          echo "  not installed  $DEST"; exit 1
-      fi
-      if [ -L "$DEST" ]; then
-          echo "  symlink -> $(readlink -f "$DEST")"
-      fi
-      if cmp -s "$SRC" "$DEST"; then
-          echo "  in sync   v$(version_of "$SRC")  $DEST"
-      else
-          echo "  DRIFTED   repo v$(version_of "$SRC") vs installed v$(version_of "$DEST")" >&2
-          echo "            re-run this script to fix it." >&2
-          exit 1
-      fi
-      exit 0 ;;
-  --link|copy|--copy) ;;
-  *) sed -n '2,25p' "$0"; exit 2 ;;
-esac
-
 mkdir -p "$INSTALL_DIR"
-rm -f "$DEST"
 
-if [ "${1:-}" = "--link" ]; then
-    ln -s "$SRC" "$DEST"
-    echo "Linked  $DEST -> $SRC"
-else
-    cp "$SRC" "$DEST"
-    chmod +x "$DEST"
-    echo "Copied  $SRC -> $DEST"
+OS="$(uname -s)"
+ARCH="$(uname -m)"
+
+# 1. Prebuilt native compiled binary next to this script
+PREBUILT=""
+if [ "$OS" = "Linux" ] && [ -f "$HERE/sensors-gorilla-linux-x86_64" ]; then
+    PREBUILT="$HERE/sensors-gorilla-linux-x86_64"
+elif [ "$OS" = "Darwin" ] && [ -f "$HERE/sensors-gorilla-macos-universal" ]; then
+    PREBUILT="$HERE/sensors-gorilla-macos-universal"
+elif [ "$OS" = "Darwin" ] && [ -f "$HERE/sensors-gorilla-macos-x86_64" ]; then
+    PREBUILT="$HERE/sensors-gorilla-macos-x86_64"
+elif [ -x "$HERE/target/release/sensors-gorilla" ]; then
+    PREBUILT="$HERE/target/release/sensors-gorilla"
 fi
 
-# Verify the artifact, not the exit code: cp and ln both report success having
-# produced something unusable if the target directory is odd.
-cmp -s "$SRC" "$DEST" || { echo "error: installed file does not match source" >&2; exit 1; }
-[ -x "$DEST" ] || { echo "error: installed file is not executable" >&2; exit 1; }
+if [ -n "$PREBUILT" ]; then
+    cp "$PREBUILT" "$DEST"
+    chmod +x "$DEST"
+    ln -sf "$DEST" "$INSTALL_DIR/sensors-gorilla"
+    echo "Installed compiled native binary -> $DEST (zero on-the-fly compilation)"
+elif command -v cargo >/dev/null 2>&1 && [ -f "$HERE/Cargo.toml" ]; then
+    (cd "$HERE" && cargo build --release --offline --locked)
+    cp "$HERE/target/release/sensors-gorilla" "$DEST"
+    chmod +x "$DEST"
+    ln -sf "$DEST" "$INSTALL_DIR/sensors-gorilla"
+    echo "Built and installed compiled native binary -> $DEST"
+elif [ -f "$HERE/sensors.gorilla" ]; then
+    # Precompile Python bytecode ahead of time so Python never compiles the module on every run
+    LIB_DIR="$HOME/.local/lib/sensors-gorilla"
+    mkdir -p "$LIB_DIR"
+    cp "$HERE/sensors.gorilla" "$LIB_DIR/sensors_gorilla_app.py"
+    python3 -m py_compile "$LIB_DIR/sensors_gorilla_app.py"
+    PYC="$(python3 -c "import importlib.util; print(importlib.util.cache_from_source('$LIB_DIR/sensors_gorilla_app.py'))")"
+    cat > "$DEST" <<EOF
+#!/bin/sh
+exec python3 "$PYC" "\$@"
+EOF
+    chmod +x "$DEST"
+    ln -sf "$DEST" "$INSTALL_DIR/sensors-gorilla"
+    echo "Installed precompiled bytecode launcher -> $DEST ($PYC)"
+else
+    echo "error: no compiled binary or source found in $HERE" >&2
+    exit 1
+fi
 
-echo "=================================================="
-echo "sensors.gorilla v$(version_of "$SRC") installed and verified"
-echo "=================================================="
-echo "Usage: sensors.gorilla         (live dashboard, follows the window)"
-echo "       sensors.gorilla --once  (one snapshot, then exit)"
-echo "       sensors.gorilla -n 5    (refresh every 5s)"
-echo ""
-case ":$PATH:" in
-  *":$INSTALL_DIR:"*) ;;
-  *) echo "WARNING: $INSTALL_DIR is not on your PATH. Add it to ~/.profile:"
-     echo "  export PATH=\"\$HOME/.local/bin:\$PATH\""; echo "" ;;
-esac
-echo "Note: For SSD health & lifespan metrics, install smartmontools:"
-echo "  sudo apt install smartmontools"
-echo "=================================================="
+"$DEST" --version
+echo "Usage: sensors.gorilla [--once] [-n 5] [--json]"
