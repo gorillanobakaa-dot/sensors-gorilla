@@ -500,6 +500,10 @@ extern "system" {
         lpcbData: *mut DWORD,
     ) -> DWORD;
     pub fn RegCloseKey(hKey: HKEY) -> DWORD;
+    pub fn OpenSCManagerW(lpMachineName: LPCWSTR, lpDatabaseName: LPCWSTR, dwDesiredAccess: DWORD) -> HANDLE;
+    pub fn OpenServiceW(hSCManager: HANDLE, lpServiceName: LPCWSTR, dwDesiredAccess: DWORD) -> HANDLE;
+    pub fn StartServiceW(hService: HANDLE, dwNumServiceArgs: DWORD, lpServiceArgVectors: *const LPCWSTR) -> BOOL;
+    pub fn CloseServiceHandle(hSCObject: HANDLE) -> BOOL;
 }
 
 /// Convert Rust string to NUL-terminated UTF-16 Vec.

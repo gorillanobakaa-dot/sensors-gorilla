@@ -238,14 +238,14 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
             ansi::paint(&format!("{nv_fan}%"), ansi::COL_FREQ, false, cap)
         ));
     } else {
+        let msg = if t.pawnio.status.is_empty() {
+            "EC/WMI not exposed"
+        } else {
+            t.pawnio.status.as_str()
+        };
         left.push(format!(
             "  System Fan Speed          : {}",
-            ansi::paint(
-                if t.pawnio.permission_denied { "Run as Admin (PawnIO)" } else { "EC/WMI not exposed" },
-                ansi::COL_MUTED,
-                false,
-                cap
-            )
+            ansi::paint(msg, ansi::COL_MUTED, false, cap)
         ));
     }
 
@@ -273,9 +273,14 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
             ansi::paint(&format!("{pw:.1} W"), ansi::COL_POWER, false, cap)
         ));
     } else {
+        let msg = if t.pawnio.status.is_empty() {
+            "N/A"
+        } else {
+            t.pawnio.status.as_str()
+        };
         left.push(format!(
             "  CPU Package Power (RAPL)  : {}",
-            ansi::paint("N/A (needs Admin + PawnIO)", ansi::COL_MUTED, false, cap)
+            ansi::paint(msg, ansi::COL_MUTED, false, cap)
         ));
     }
 
@@ -456,6 +461,23 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
         "  GPU Memory & Engines        : Ded {:.0} MB  Shr {:.0} MB  |  3D {:.0}%  Dec {:.0}%  Enc {:.0}%",
         t.pdh.gpu_dedicated_mb, t.pdh.gpu_shared_mb, t.pdh.gpu_3d_pct, t.pdh.gpu_decode_pct, t.pdh.gpu_encode_pct
     ));
+    if !t.ram_spec.is_empty() || !t.display_mode.is_empty() {
+        let br_s = t.brightness_pct.map(|b| format!(" ({b}% bright)")).unwrap_or_default();
+        right.push(format!(
+            "  Hardware & Panel            : {}  |  {}{br_s}",
+            if t.ram_spec.is_empty() { "RAM" } else { t.ram_spec.as_str() },
+            if t.display_mode.is_empty() { "Display" } else { t.display_mode.as_str() }
+        ));
+    }
+    if !t.pdh.net_active_iface.is_empty() {
+        right.push(format!(
+            "  Network Link & Throughput   : {} ({:.0} Mbps)  |  RX {:.1} KB/s  TX {:.1} KB/s",
+            t.pdh.net_active_iface.chars().take(30).collect::<String>(),
+            t.pdh.net_link_mbps,
+            t.pdh.net_rx_kbps,
+            t.pdh.net_tx_kbps
+        ));
+    }
 
     if is_l15 {
         if let Some(odo) = &t.lenovo_odometer {
@@ -476,9 +498,9 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
         ));
     }
 
-    if t.pawnio.permission_denied && !t.pawnio.active {
+    if !t.pawnio.status.is_empty() && !t.pawnio.active {
         right.push(ansi::paint(
-            "  Tip: Run as Administrator with PawnIO for per-core MSR temps, RAPL watts & EC Fan RPM.",
+            &format!("  Silicon Probe               : {}", t.pawnio.status),
             ansi::COL_MUTED,
             false,
             cap,

@@ -21,6 +21,10 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Rust target
         run: rustup target add ${{ matrix.target }}
+      - name: Fetch and SHA-256 verify PawnIO 0.2.12 modules (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\scripts\fetch_pawnio_modules.ps1
       - name: Run unit tests
         run: cargo test --release --offline --locked
       - name: Build release binaries (zero on-the-fly compilation)
