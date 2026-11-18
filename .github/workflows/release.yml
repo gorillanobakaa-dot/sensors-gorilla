@@ -29,13 +29,14 @@ jobs:
           if (-not (Test-Path $iscc)) { $iscc = (Get-Command ISCC.exe).Source }
           & $iscc installer\sensors-gorilla-generic.iss
           & $iscc installer\sensors-gorilla-l15.iss
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\release\sensors-gorilla.exe dist\
+          Copy-Item target\x86_64-pc-windows-msvc\release\sensors-gorilla-l15.exe dist\
+          Copy-Item installer\output\*installer.exe dist\
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: |
-            target/x86_64-pc-windows-msvc/release/sensors-gorilla.exe
-            target/x86_64-pc-windows-msvc/release/sensors-gorilla-l15.exe
-            installer/output/*.exe
+          path: dist/*
 
   linux:
     needs: test

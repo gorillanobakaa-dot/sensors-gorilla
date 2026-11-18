@@ -1,6 +1,6 @@
 [package]
 name = "sensors-gorilla"
-version = "3.0.0"
+version = "3.0.1"
 edition = "2021"
 description = "Zero-dependency compiled hardware sensor dashboard for Windows (Generic + ThinkPad L15 Gen 3), Linux, and macOS."
 repository = "https://github.com/gorillanobakaa-dot/sensors-gorilla"
