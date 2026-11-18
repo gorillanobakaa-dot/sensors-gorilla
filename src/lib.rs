@@ -99,22 +99,38 @@ pub fn run_app(is_l15_windows: bool) {
             println!("{}", win_dashboard::render(&snap, is_l15_windows));
             return;
         }
-        let mut out = io::BufWriter::new(io::stdout());
+        let mut out = io::BufWriter::with_capacity(65_536, io::stdout());
+        let _ = out.write_all(b"\x1b[?25l\x1b[2J\x1b[H");
+        let mut last_size = (0usize, 0usize);
         while !win_sensors::ctrl_c_pressed() {
-            let cols = win_sensors::terminal_size().map(|(c, _)| c).unwrap_or(0);
+            let cur_size = win_sensors::terminal_size().unwrap_or((0, 0));
+            let cols = cur_size.0;
             let snap = win_sensors::collect(&mut pdh_mon, is_l15_windows, !opts.no_ec);
             let frame = win_dashboard::render(&snap, is_l15_windows);
-            let _ = write!(out, "\x1b[?2026h\x1b[H\x1b[J{}\n", frame);
-            let _ = writeln!(
-                out,
-                "Refreshed every {:.1}s{} · 24-bit TrueColor. Press Ctrl+C to exit.\x1b[?2026l",
+            let mut buf = String::with_capacity(frame.len() + 512);
+            buf.push_str("\x1b[?2026h");
+            if cur_size != last_size && last_size != (0, 0) {
+                buf.push_str("\x1b[2J");
+            }
+            last_size = cur_size;
+            buf.push_str("\x1b[H");
+            for line in frame.lines() {
+                buf.push_str(line);
+                buf.push_str("\x1b[K\n");
+            }
+            let footer = format!(
+                "Refreshed every {:.1}s{} · 24-bit TrueColor. Press Ctrl+C to exit.",
                 opts.interval,
                 if cols > 0 { format!(" · window {cols} cols, redraws on resize") } else { String::new() }
             );
+            buf.push_str(&footer);
+            buf.push_str("\x1b[K\x1b[J\x1b[?2026l");
+            let _ = out.write_all(buf.as_bytes());
             let _ = out.flush();
             win_sensors::wait_resize_or_timeout((opts.interval * 1000.0) as u32);
         }
-        println!("\nExiting dashboard.");
+        let _ = out.write_all(b"\x1b[?25h\nExiting dashboard.\n");
+        let _ = out.flush();
     }
 
     #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -137,20 +153,34 @@ pub fn run_app(is_l15_windows: bool) {
             return;
         }
         let waiter = posix::ResizeWaiter::new();
-        let mut out = io::BufWriter::new(io::stdout());
+        let mut out = io::BufWriter::with_capacity(65_536, io::stdout());
+        let _ = out.write_all(b"\x1b[?25l\x1b[2J\x1b[H");
+        let mut last_size = (0usize, 0usize);
         while !posix::terminated() {
-            let cols = posix::terminal_size().map(|(c, _)| c).unwrap_or(0);
+            let cur_size = posix::terminal_size().unwrap_or((0, 0));
+            let cols = cur_size.0;
             #[cfg(target_os = "linux")]
             let frame = linux::build_dashboard();
             #[cfg(target_os = "macos")]
             let frame = macos::build_dashboard();
-            let _ = write!(out, "\x1b[H\x1b[J{}\n", frame);
-            let _ = writeln!(
-                out,
+            let mut buf = String::with_capacity(frame.len() + 512);
+            if cur_size != last_size && last_size != (0, 0) {
+                buf.push_str("\x1b[2J");
+            }
+            last_size = cur_size;
+            buf.push_str("\x1b[H");
+            for line in frame.lines() {
+                buf.push_str(line);
+                buf.push_str("\x1b[K\n");
+            }
+            let footer = format!(
                 "Refreshed every {:.1}s{}. Press Ctrl+C to exit.",
                 opts.interval,
                 if cols > 0 { format!(" · window {cols} cols, redraws on resize") } else { String::new() }
             );
+            buf.push_str(&footer);
+            buf.push_str("\x1b[K\x1b[J");
+            let _ = out.write_all(buf.as_bytes());
             let _ = out.flush();
             let ms = (opts.interval * 1000.0) as i32;
             if let Some(ref w) = waiter {
@@ -159,6 +189,7 @@ pub fn run_app(is_l15_windows: bool) {
                 std::thread::sleep(std::time::Duration::from_millis(ms as u64));
             }
         }
-        println!("\nExiting dashboard.");
+        let _ = out.write_all(b"\x1b[?25h\nExiting dashboard.\n");
+        let _ = out.flush();
     }
 }

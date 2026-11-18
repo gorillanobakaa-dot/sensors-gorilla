@@ -1,5 +1,5 @@
 #define AppName "sensors.gorilla (ThinkPad L15 Gen 3)"
-#define AppVersion "3.0.1"
+#define AppVersion "3.0.2"
 #define AppExe "sensors-gorilla-l15.exe"
 #define AppPublisher "Gorilla System Tools"
 #define AppURL "https://github.com/gorillanobakaa-dot/sensors-gorilla"
@@ -34,6 +34,7 @@ Source: "..\assets\icons\sensors-gorilla.ico"; DestDir: "{app}"; Flags: ignoreve
 Source: "..\pawnio\IntelMSR.bin"; DestDir: "{app}\pawnio"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\pawnio\IntelPCHThermal.bin"; DestDir: "{app}\pawnio"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\pawnio\LpcThinkpadEC.bin"; DestDir: "{app}\pawnio"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "..\pawnio\LpcACPIEC.bin"; DestDir: "{app}\pawnio"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\pawnio\COPYING"; DestDir: "{app}\pawnio"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 

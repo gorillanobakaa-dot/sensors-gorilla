@@ -1,5 +1,5 @@
 #define AppName "sensors.gorilla (Windows Generic)"
-#define AppVersion "3.0.1"
+#define AppVersion "3.0.2"
 #define AppExe "sensors-gorilla.exe"
 #define AppPublisher "Gorilla System Tools"
 #define AppURL "https://github.com/gorillanobakaa-dot/sensors-gorilla"

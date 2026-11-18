@@ -771,6 +771,10 @@ pub struct PdhSample {
     pub disk_read_mbps: f64,
     pub disk_write_mbps: f64,
     pub disk_time_pct: f64,
+    pub net_rx_kbps: f64,
+    pub net_tx_kbps: f64,
+    pub net_link_mbps: f64,
+    pub net_active_iface: String,
 }
 
 /// Persistent PDH query for sub-millisecond performance counter sampling across ticks.
@@ -787,6 +791,9 @@ pub struct PdhMonitor {
     c_disk_r: PDH_HCOUNTER,
     c_disk_w: PDH_HCOUNTER,
     c_disk_t: PDH_HCOUNTER,
+    c_net_rx: PDH_HCOUNTER,
+    c_net_tx: PDH_HCOUNTER,
+    c_net_bw: PDH_HCOUNTER,
     primed: bool,
 }
 
@@ -815,6 +822,9 @@ impl PdhMonitor {
             c_disk_r: add(r"\PhysicalDisk(_Total)\Disk Read Bytes/sec"),
             c_disk_w: add(r"\PhysicalDisk(_Total)\Disk Write Bytes/sec"),
             c_disk_t: add(r"\PhysicalDisk(_Total)\% Disk Time"),
+            c_net_rx: add(r"\Network Interface(*)\Bytes Received/sec"),
+            c_net_tx: add(r"\Network Interface(*)\Bytes Sent/sec"),
+            c_net_bw: add(r"\Network Interface(*)\Current Bandwidth"),
             primed: false,
         };
         unsafe {
@@ -948,6 +958,20 @@ impl PdhMonitor {
         s.disk_read_mbps = Self::read_scalar(self.c_disk_r).unwrap_or(0.0) / 1_048_576.0;
         s.disk_write_mbps = Self::read_scalar(self.c_disk_w).unwrap_or(0.0) / 1_048_576.0;
         s.disk_time_pct = Self::read_scalar(self.c_disk_t).unwrap_or(0.0);
+
+        let rx_arr = Self::read_array(self.c_net_rx);
+        let tx_arr = Self::read_array(self.c_net_tx);
+        let bw_arr = Self::read_array(self.c_net_bw);
+        s.net_rx_kbps = rx_arr.iter().map(|(_, v)| *v).sum::<f64>() / 1024.0;
+        s.net_tx_kbps = tx_arr.iter().map(|(_, v)| *v).sum::<f64>() / 1024.0;
+        if let Some((best_name, best_bw)) = bw_arr
+            .into_iter()
+            .filter(|(n, bw)| *bw > 0.0 && !n.to_ascii_lowercase().contains("isatap") && !n.to_ascii_lowercase().contains("teredo"))
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            s.net_active_iface = best_name;
+            s.net_link_mbps = best_bw / 1_000_000.0;
+        }
         s
     }
 }
@@ -1193,6 +1217,7 @@ fn read_nvml() -> Option<NvmlReading> {
 pub struct PawnIoReadings {
     pub active: bool,
     pub permission_denied: bool,
+    pub status: String,
     pub package_temp_c: Option<f64>,
     pub core_temps_c: Vec<(usize, bool, f64)>, // (core_id, is_p_core, temp_c)
     pub pch_temp_c: Option<f64>,
@@ -1210,19 +1235,23 @@ pub struct PawnIoReadings {
 const HASH_INTEL_MSR: &str = "30a5a302283de1e080dfee99e686eca91d7e53e911095cb91a320fb961f1ce12";
 const HASH_INTEL_PCH: &str = "478500ae78aebef3ae7a0b5fe4848d2d5737e8f7c5d51200c284a61c21d7865d";
 const HASH_THINKPAD_EC: &str = "54bbf7f10d3511abfff167597485926ddf1587045f6ae849671cfaa85f97a1db";
+const HASH_ACPI_EC: &str = "c38fd116e7aff4d1fdb0a494e296be0a6708e5a22fc72f14587442fb7f8f7906";
+const HASH_AMD_FAM17: &str = "dae74615761b78bdf064dfb3e136252ddcc6fc727d88f14738d0e5800d427a91";
 
-fn find_pawnio_module(name: &str, expected_sha: &str) -> Option<Vec<u8>> {
+const EMBED_INTEL_MSR: &[u8] = include_bytes!("../pawnio/IntelMSR.bin");
+const EMBED_INTEL_PCH: &[u8] = include_bytes!("../pawnio/IntelPCHThermal.bin");
+const EMBED_THINKPAD_EC: &[u8] = include_bytes!("../pawnio/LpcThinkpadEC.bin");
+const EMBED_ACPI_EC: &[u8] = include_bytes!("../pawnio/LpcACPIEC.bin");
+const EMBED_AMD_FAM17: &[u8] = include_bytes!("../pawnio/AMDFamily17.bin");
+
+fn load_verified_module(name: &str, expected_sha: &str, embedded: &[u8]) -> Option<Vec<u8>> {
     let mut candidates: Vec<PathBuf> = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             candidates.push(dir.join("pawnio").join(name));
             candidates.push(dir.join(name));
-            if let Some(p2) = dir.parent().and_then(|p| p.parent()) {
-                candidates.push(p2.join("pawnio").join(name));
-            }
         }
     }
-    candidates.push(PathBuf::from("pawnio").join(name));
     for p in candidates {
         if p.is_file() {
             if let Ok(bytes) = fs::read(&p) {
@@ -1232,8 +1261,35 @@ fn find_pawnio_module(name: &str, expected_sha: &str) -> Option<Vec<u8>> {
             }
         }
     }
-    None
+    // Always fall back to the SHA-256-verified module embedded in the executable
+    if sha256::sha256_hex(embedded) == expected_sha {
+        Some(embedded.to_vec())
+    } else {
+        None
+    }
 }
+
+fn ensure_pawnio_driver_started() {
+    let scm = unsafe { OpenSCManagerW(ptr::null(), ptr::null(), 0x0001) }; // SC_MANAGER_CONNECT
+    if scm.is_null() {
+        return;
+    }
+    let svc_name = to_wide("PawnIO");
+    let svc = unsafe { OpenServiceW(scm, svc_name.as_ptr(), 0x0010) }; // SERVICE_START
+    if !svc.is_null() {
+        unsafe {
+            let _ = StartServiceW(svc, 0, ptr::null());
+            let _ = CloseServiceHandle(svc);
+        }
+    }
+    unsafe {
+        let _ = CloseServiceHandle(scm);
+    }
+}
+
+// PawnIO direct DeviceIoControl constants: CTL_CODE(41394, func, METHOD_BUFFERED=0, FILE_ANY_ACCESS=0)
+const PAWNIO_IOCTL_LOAD_BINARY: DWORD = (41394 << 16) | (0x821 << 2);
+const PAWNIO_IOCTL_EXECUTE_FN: DWORD = (41394 << 16) | (0x841 << 2);
 
 type FnPawnOpen = unsafe extern "system" fn(*mut HANDLE) -> HRESULT;
 type FnPawnLoad = unsafe extern "system" fn(HANDLE, *const u8, usize) -> HRESULT;
@@ -1250,10 +1306,7 @@ struct PawnLib {
 
 impl PawnLib {
     fn load_dll() -> Option<Self> {
-        let candidates = [
-            r"C:\Program Files\PawnIO\PawnIOLib.dll",
-            "PawnIOLib.dll",
-        ];
+        let candidates = [r"C:\Program Files\PawnIO\PawnIOLib.dll", "PawnIOLib.dll"];
         for c in candidates {
             let p = Path::new(c);
             if c.contains('\\') && !p.exists() {
@@ -1292,14 +1345,153 @@ impl Drop for PawnLib {
     }
 }
 
-fn read_thinkpad_ec_byte(lib: &PawnLib, handle: HANDLE, offset: u8) -> Option<u8> {
-    let exec_rw = |name: &[u8], inp: &[u64], out: &mut [u64]| -> bool {
-        let mut ret = 0usize;
-        unsafe { (lib.exec)(handle, name.as_ptr() as *const i8, inp.as_ptr(), inp.len(), out.as_mut_ptr(), out.len(), &mut ret) >= 0 }
-    };
+enum PawnConn<'a> {
+    Dll(&'a PawnLib, HANDLE),
+    Direct(HANDLE),
+}
+
+impl<'a> PawnConn<'a> {
+    fn open(lib: Option<&'a PawnLib>) -> Result<Self, DWORD> {
+        let try_direct = || -> Result<HANDLE, DWORD> {
+            for dev in [r"\\.\GLOBALROOT\Device\PawnIO", r"\\.\PawnIO"] {
+                let w = to_wide(dev);
+                let h = unsafe {
+                    CreateFileW(
+                        w.as_ptr(),
+                        GENERIC_READ | GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        ptr::null_mut(),
+                        OPEN_EXISTING,
+                        0,
+                        ptr::null_mut(),
+                    )
+                };
+                if !h.is_null() && h != INVALID_HANDLE_VALUE {
+                    return Ok(h);
+                }
+            }
+            Err(unsafe { GetLastError() })
+        };
+
+        if let Some(l) = lib {
+            let mut h: HANDLE = ptr::null_mut();
+            let hr = unsafe { (l.open)(&mut h) };
+            if hr >= 0 && !h.is_null() {
+                return Ok(PawnConn::Dll(l, h));
+            }
+            let err = (hr as u32) & 0xFFFF;
+            if err == 2 || err == 3 {
+                ensure_pawnio_driver_started();
+                let hr2 = unsafe { (l.open)(&mut h) };
+                if hr2 >= 0 && !h.is_null() {
+                    return Ok(PawnConn::Dll(l, h));
+                }
+            }
+            return Err(hr as DWORD);
+        }
+
+        match try_direct() {
+            Ok(h) => Ok(PawnConn::Direct(h)),
+            Err(2 | 3) => {
+                ensure_pawnio_driver_started();
+                try_direct().map(PawnConn::Direct)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    fn load_blob(&self, blob: &[u8]) -> Result<(), i32> {
+        match self {
+            PawnConn::Dll(l, h) => {
+                let hr = unsafe { (l.load)(*h, blob.as_ptr(), blob.len()) };
+                if hr >= 0 { Ok(()) } else { Err(hr) }
+            }
+            PawnConn::Direct(h) => {
+                let mut ret: DWORD = 0;
+                let ok = unsafe {
+                    DeviceIoControl(
+                        *h,
+                        PAWNIO_IOCTL_LOAD_BINARY,
+                        blob.as_ptr() as *const c_void,
+                        blob.len() as DWORD,
+                        ptr::null_mut(),
+                        0,
+                        &mut ret,
+                        ptr::null_mut(),
+                    )
+                };
+                if ok != 0 {
+                    Ok(())
+                } else {
+                    Err(unsafe { GetLastError() as i32 })
+                }
+            }
+        }
+    }
+
+    fn exec(&self, name: &str, inp: &[u64], out: &mut [u64]) -> bool {
+        match self {
+            PawnConn::Dll(l, h) => {
+                let mut cname = name.as_bytes().to_vec();
+                cname.push(0);
+                let mut ret = 0usize;
+                unsafe {
+                    (l.exec)(
+                        *h,
+                        cname.as_ptr() as *const i8,
+                        inp.as_ptr(),
+                        inp.len(),
+                        out.as_mut_ptr(),
+                        out.len(),
+                        &mut ret,
+                    ) >= 0
+                }
+            }
+            PawnConn::Direct(h) => {
+                // Input buffer: 32-byte zero-padded function name + u64 args
+                let mut in_buf = vec![0u8; 32 + inp.len() * 8];
+                let nb = name.as_bytes();
+                let n = nb.len().min(31);
+                in_buf[..n].copy_from_slice(&nb[..n]);
+                for (i, val) in inp.iter().enumerate() {
+                    in_buf[32 + i * 8..32 + (i + 1) * 8].copy_from_slice(&val.to_le_bytes());
+                }
+                let mut ret: DWORD = 0;
+                let ok = unsafe {
+                    DeviceIoControl(
+                        *h,
+                        PAWNIO_IOCTL_EXECUTE_FN,
+                        in_buf.as_ptr() as *const c_void,
+                        in_buf.len() as DWORD,
+                        out.as_mut_ptr() as *mut c_void,
+                        (out.len() * 8) as DWORD,
+                        &mut ret,
+                        ptr::null_mut(),
+                    )
+                };
+                ok != 0 && (ret as usize) >= out.len() * 8
+            }
+        }
+    }
+}
+
+impl<'a> Drop for PawnConn<'a> {
+    fn drop(&mut self) {
+        match self {
+            PawnConn::Dll(l, h) => unsafe {
+                let _ = (l.close)(*h);
+            },
+            PawnConn::Direct(h) => unsafe {
+                let _ = CloseHandle(*h);
+            },
+        }
+    }
+}
+
+fn read_ec_byte_readonly(conn: &PawnConn, data_port: u64, cmd_port: u64, offset: u8) -> Option<u8> {
     let pio_read = |port: u64| -> Option<u8> {
         let mut out = [0u64; 1];
-        if exec_rw(b"ioctl_pio_read\0", &[port], &mut out) {
+        if conn.exec("ioctl_pio_read", &[port], &mut out) {
             Some((out[0] & 0xFF) as u8)
         } else {
             None
@@ -1307,265 +1499,326 @@ fn read_thinkpad_ec_byte(lib: &PawnLib, handle: HANDLE, offset: u8) -> Option<u8
     };
     let pio_write = |port: u64, val: u64| -> bool {
         let mut out = [];
-        exec_rw(b"ioctl_pio_write\0", &[port, val], &mut out)
+        conn.exec("ioctl_pio_write", &[port, val], &mut out)
     };
-    const EC_DATA: u64 = 0x1600;
-    const EC_CMD: u64 = 0x1604;
 
-    // Drain stale OBF
     for _ in 0..4 {
-        let st = pio_read(EC_CMD)?;
+        let st = pio_read(cmd_port)?;
         if (st & 0x01) == 0 {
             break;
         }
-        let _ = pio_read(EC_DATA);
+        let _ = pio_read(data_port);
     }
-    // Wait IBF == 0
     for _ in 0..250 {
-        if (pio_read(EC_CMD)? & 0x02) == 0 {
+        if (pio_read(cmd_port)? & 0x02) == 0 {
             break;
         }
         std::thread::sleep(Duration::from_micros(20));
     }
-    if (pio_read(EC_CMD)? & 0x02) != 0 {
+    if (pio_read(cmd_port)? & 0x02) != 0 {
         return None;
     }
-    // READ command ONLY (0x80) - NEVER 0x81 write
-    if !pio_write(EC_CMD, 0x80) {
+    // READ command ONLY (0x80) — NEVER 0x81 write
+    if !pio_write(cmd_port, 0x80) {
         return None;
     }
     for _ in 0..250 {
-        if (pio_read(EC_CMD)? & 0x02) == 0 {
+        if (pio_read(cmd_port)? & 0x02) == 0 {
             break;
         }
         std::thread::sleep(Duration::from_micros(20));
     }
-    if !pio_write(EC_DATA, offset as u64) {
+    if !pio_write(data_port, offset as u64) {
         return None;
     }
     for _ in 0..250 {
-        if (pio_read(EC_CMD)? & 0x01) != 0 {
-            return pio_read(EC_DATA);
+        if (pio_read(cmd_port)? & 0x01) != 0 {
+            return pio_read(data_port);
         }
         std::thread::sleep(Duration::from_micros(20));
     }
     None
 }
 
-pub fn probe_pawnio(topo: &CoreTopology, read_thinkpad_ec: bool) -> PawnIoReadings {
+pub fn probe_pawnio(topo: &CoreTopology, cpu_name: &str, read_thinkpad_ec: bool) -> PawnIoReadings {
     let mut r = PawnIoReadings::default();
-    let lib = match PawnLib::load_dll() {
-        Some(l) => l,
-        None => return r,
-    };
+    let lib = PawnLib::load_dll();
+    let mut loaded_parts: Vec<&str> = Vec::new();
+    let is_amd = cpu_name.to_ascii_uppercase().contains("AMD");
 
-    // 1. Intel MSR (read-only RDMSR)
-    if let Some(msr_blob) = find_pawnio_module("IntelMSR.bin", HASH_INTEL_MSR) {
-        let mut h: HANDLE = ptr::null_mut();
-        let hr = unsafe { (lib.open)(&mut h) };
-        if hr < 0 || h.is_null() {
-            // 0x80070005 = E_ACCESSDENIED
-            if hr == (0x8007_0005u32 as i32) {
+    // Verify we can open PawnIO at all (via PawnIOLib.dll or direct DeviceIoControl)
+    match PawnConn::open(lib.as_ref()) {
+        Err(e) => {
+            let low = e & 0xFFFF;
+            if e == (0x8007_0005) || low == 5 {
                 r.permission_denied = true;
+                r.status = "Run as Administrator for CPU die/MSR temps, RAPL watts & EC Fan RPM".to_string();
+            } else if low == 2 || low == 3 {
+                r.status = "PawnIO driver not installed (winget install namazso.PawnIO)".to_string();
+            } else {
+                r.status = format!("PawnIO open failed (err 0x{e:08X})");
             }
             return r;
         }
-        if unsafe { (lib.load)(h, msr_blob.as_ptr(), msr_blob.len()) } >= 0 {
-            r.active = true;
-            let read_msr = |msr: u64| -> Option<u64> {
-                let mut out = [0u64; 1];
-                let mut ret = 0usize;
-                let rc = unsafe {
-                    (lib.exec)(
-                        h,
-                        b"ioctl_read_msr\0".as_ptr() as *const i8,
-                        &msr,
-                        1,
-                        out.as_mut_ptr(),
-                        1,
-                        &mut ret,
-                    )
-                };
-                if rc >= 0 && ret >= 1 { Some(out[0]) } else { None }
-            };
-
-            let tjmax = read_msr(0x1A2)
-                .map(|v| ((v >> 16) & 0xFF) as f64)
-                .filter(|&t| t > 50.0 && t < 130.0)
-                .unwrap_or(100.0);
-
-            if let Some(pkg) = read_msr(0x1B1) {
-                if ((pkg >> 31) & 1) != 0 {
-                    let dist = ((pkg >> 16) & 0x7F) as f64;
-                    r.package_temp_c = Some(tjmax - dist);
-                }
-                r.throttle_pkg_now = (pkg & 1) != 0;
-                r.throttle_pkg_log = ((pkg >> 1) & 1) != 0;
-            }
-
-            if let Some(lim) = read_msr(0x64F) {
-                for (bit, label) in [
-                    (0, "PROCHOT"),
-                    (1, "Thermal"),
-                    (5, "RATL"),
-                    (6, "VR Thermal"),
-                    (10, "Pkg Power Limit"),
-                    (11, "Current/EDP"),
-                ] {
-                    if ((lim >> bit) & 1) != 0 {
-                        r.throttle_reasons.push(label.to_string());
-                    }
-                }
-            }
-
-            // Per-core IA32_THERM_STATUS via thread affinity
-            let thr = unsafe { GetCurrentThread() };
-            for (core_idx, is_p, logical_cpu) in &topo.core_reps {
-                if *logical_cpu < (usize::BITS as usize) {
-                    let prev = unsafe { SetThreadAffinityMask(thr, 1usize << *logical_cpu) };
-                    if prev != 0 {
-                        if let Some(ts) = read_msr(0x19C) {
-                            if ((ts >> 31) & 1) != 0 {
-                                let dist = ((ts >> 16) & 0x7F) as f64;
-                                r.core_temps_c.push((*core_idx, *is_p, tjmax - dist));
-                            }
-                        }
-                        unsafe {
-                            SetThreadAffinityMask(thr, prev);
-                        }
-                    }
-                }
-            }
-
-            // RAPL energy delta over 150ms
-            if let Some(unit_raw) = read_msr(0x606) {
-                let e_unit = 0.5_f64.powi(((unit_raw >> 8) & 0x1F) as i32);
-                let e1_pkg = read_msr(0x611).map(|v| v & 0xFFFF_FFFF);
-                let e1_pp0 = read_msr(0x639).map(|v| v & 0xFFFF_FFFF);
-                let e1_pp1 = read_msr(0x641).map(|v| v & 0xFFFF_FFFF);
-                let t1 = Instant::now();
-                std::thread::sleep(Duration::from_millis(150));
-                let e2_pkg = read_msr(0x611).map(|v| v & 0xFFFF_FFFF);
-                let e2_pp0 = read_msr(0x639).map(|v| v & 0xFFFF_FFFF);
-                let e2_pp1 = read_msr(0x641).map(|v| v & 0xFFFF_FFFF);
-                let dt = t1.elapsed().as_secs_f64();
-                if dt > 0.0 {
-                    if let (Some(a), Some(b)) = (e1_pkg, e2_pkg) {
-                        let d = if b >= a { b - a } else { (u32::MAX as u64 - a) + b + 1 };
-                        r.rapl_pkg_w = Some(d as f64 * e_unit / dt);
-                    }
-                    if let (Some(a), Some(b)) = (e1_pp0, e2_pp0) {
-                        let d = if b >= a { b - a } else { (u32::MAX as u64 - a) + b + 1 };
-                        r.rapl_cores_w = Some(d as f64 * e_unit / dt);
-                    }
-                    if let (Some(a), Some(b)) = (e1_pp1, e2_pp1) {
-                        let d = if b >= a { b - a } else { (u32::MAX as u64 - a) + b + 1 };
-                        r.rapl_uncore_w = Some(d as f64 * e_unit / dt);
-                    }
-                }
-            }
-        }
-        unsafe { (lib.close)(h) };
+        Ok(_probe_conn) => {}
     }
 
-    // 2. Intel PCH Thermal (read-only MMIO)
-    if let Some(pch_blob) = find_pawnio_module("IntelPCHThermal.bin", HASH_INTEL_PCH) {
-        let mut h: HANDLE = ptr::null_mut();
-        if unsafe { (lib.open)(&mut h) } >= 0 && !h.is_null() {
-            if unsafe { (lib.load)(h, pch_blob.as_ptr(), pch_blob.len()) } >= 0 {
-                let mut out = [0u64; 2];
-                let mut ret = 0usize;
-                if unsafe {
-                    (lib.exec)(
-                        h,
-                        b"ioctl_read_raw\0".as_ptr() as *const i8,
-                        ptr::null(),
-                        0,
-                        out.as_mut_ptr(),
-                        2,
-                        &mut ret,
-                    )
-                } >= 0
-                    && ret >= 2
-                {
-                    let raw = out[0];
-                    let route = out[1];
-                    if route == 1 {
-                        let c = (raw & 0x1FF) as f64 * 0.5 - 50.0;
-                        if c > 0.0 && c < 130.0 {
-                            r.pch_temp_c = Some(c);
-                        }
-                    } else if route == 2 && (raw & (1 << 31)) != 0 {
-                        let c = (raw & 0xFF) as f64;
-                        if c > 0.0 && c < 130.0 {
-                            r.pch_temp_c = Some(c);
-                        }
-                    }
-                }
-            }
-            unsafe { (lib.close)(h) };
-        }
-    }
-
-    // 3. ThinkPad EC Read-Only via 0x1600/0x1604 sideband window (L15 build only, NEVER writes)
-    if read_thinkpad_ec {
-        if let Some(ec_blob) = find_pawnio_module("LpcThinkpadEC.bin", HASH_THINKPAD_EC) {
-            let mut h: HANDLE = ptr::null_mut();
-            if unsafe { (lib.open)(&mut h) } >= 0 && !h.is_null() {
-                if unsafe { (lib.load)(h, ec_blob.as_ptr(), ec_blob.len()) } >= 0 {
-                    let mtx_name = to_wide(r"Global\Access_EC");
-                    let mtx = unsafe { CreateMutexW(ptr::null_mut(), 0, mtx_name.as_ptr()) };
-                    let locked = if !mtx.is_null() {
-                        unsafe { WaitForSingleObject(mtx, 200) == WAIT_OBJECT_0 }
-                    } else {
-                        true
-                    };
-                    if locked {
-                        if let (Some(lo), Some(hi)) = (
-                            read_thinkpad_ec_byte(&lib, h, 0x84),
-                            read_thinkpad_ec_byte(&lib, h, 0x85),
-                        ) {
-                            let rpm = ((hi as u16) << 8) | (lo as u16);
-                            if rpm < 15_000 {
-                                r.tp_fan_rpm = Some(rpm);
+    // 1A. Intel MSR (read-only RDMSR)
+    if !is_amd {
+        if let Some(msr_blob) = load_verified_module("IntelMSR.bin", HASH_INTEL_MSR, EMBED_INTEL_MSR) {
+            if let Ok(conn) = PawnConn::open(lib.as_ref()) {
+                match conn.load_blob(&msr_blob) {
+                    Ok(()) => {
+                        r.active = true;
+                        loaded_parts.push("IntelMSR");
+                        let read_msr = |msr: u64| -> Option<u64> {
+                            let mut out = [0u64; 1];
+                            if conn.exec("ioctl_read_msr", &[msr], &mut out) {
+                                Some(out[0])
+                            } else {
+                                None
                             }
+                        };
+
+                        let tjmax = read_msr(0x1A2)
+                            .map(|v| ((v >> 16) & 0xFF) as f64)
+                            .filter(|&t| t > 50.0 && t < 130.0)
+                            .unwrap_or(100.0);
+
+                        if let Some(pkg) = read_msr(0x1B1) {
+                            if ((pkg >> 31) & 1) != 0 {
+                                let dist = ((pkg >> 16) & 0x7F) as f64;
+                                r.package_temp_c = Some(tjmax - dist);
+                            }
+                            r.throttle_pkg_now = (pkg & 1) != 0;
+                            r.throttle_pkg_log = ((pkg >> 1) & 1) != 0;
                         }
-                        if let Some(ctl) = read_thinkpad_ec_byte(&lib, h, 0x2F) {
-                            r.tp_fan_mode = Some(match ctl {
-                                0x80 => "BIOS auto (0x80)".to_string(),
-                                0x40 => "Disengaged (0x40)".to_string(),
-                                lvl if lvl <= 7 => format!("Level {lvl}"),
-                                other => format!("0x{other:02X}"),
-                            });
-                        }
-                        for (off, label) in [
-                            (0x78, "EC CPU"),
-                            (0x79, "EC APS"),
-                            (0x7A, "EC CRD"),
-                            (0x7B, "EC GPU"),
-                            (0x7E, "EC BAT"),
-                            (0xC0, "EC BUS"),
-                            (0xC1, "EC PCI"),
-                            (0xC2, "EC PWR"),
-                        ] {
-                            if let Some(b) = read_thinkpad_ec_byte(&lib, h, off) {
-                                let t = (b as i8) as i32;
-                                if t > 0 && t < 125 {
-                                    r.tp_ec_temps.push((label.to_string(), t));
+
+                        if let Some(lim) = read_msr(0x64F) {
+                            for (bit, label) in [
+                                (0, "PROCHOT"),
+                                (1, "Thermal"),
+                                (5, "RATL"),
+                                (6, "VR Thermal"),
+                                (10, "Pkg Power Limit"),
+                                (11, "Current/EDP"),
+                            ] {
+                                if ((lim >> bit) & 1) != 0 {
+                                    r.throttle_reasons.push(label.to_string());
                                 }
                             }
                         }
-                        if !mtx.is_null() {
-                            unsafe { ReleaseMutex(mtx) };
+
+                        let thr = unsafe { GetCurrentThread() };
+                        for (core_idx, is_p, logical_cpu) in &topo.core_reps {
+                            if *logical_cpu < (usize::BITS as usize) {
+                                let prev = unsafe { SetThreadAffinityMask(thr, 1usize << *logical_cpu) };
+                                if prev != 0 {
+                                    if let Some(ts) = read_msr(0x19C) {
+                                        if ((ts >> 31) & 1) != 0 {
+                                            let dist = ((ts >> 16) & 0x7F) as f64;
+                                            r.core_temps_c.push((*core_idx, *is_p, tjmax - dist));
+                                        }
+                                    }
+                                    unsafe {
+                                        SetThreadAffinityMask(thr, prev);
+                                    }
+                                }
+                            }
+                        }
+
+                        if let Some(unit_raw) = read_msr(0x606) {
+                            let e_unit = 0.5_f64.powi(((unit_raw >> 8) & 0x1F) as i32);
+                            let e1_pkg = read_msr(0x611).map(|v| v & 0xFFFF_FFFF);
+                            let e1_pp0 = read_msr(0x639).map(|v| v & 0xFFFF_FFFF);
+                            let e1_pp1 = read_msr(0x641).map(|v| v & 0xFFFF_FFFF);
+                            let t1 = Instant::now();
+                            std::thread::sleep(Duration::from_millis(150));
+                            let e2_pkg = read_msr(0x611).map(|v| v & 0xFFFF_FFFF);
+                            let e2_pp0 = read_msr(0x639).map(|v| v & 0xFFFF_FFFF);
+                            let e2_pp1 = read_msr(0x641).map(|v| v & 0xFFFF_FFFF);
+                            let dt = t1.elapsed().as_secs_f64();
+                            if dt > 0.0 {
+                                if let (Some(a), Some(b)) = (e1_pkg, e2_pkg) {
+                                    let d = if b >= a { b - a } else { (u32::MAX as u64 - a) + b + 1 };
+                                    r.rapl_pkg_w = Some(d as f64 * e_unit / dt);
+                                }
+                                if let (Some(a), Some(b)) = (e1_pp0, e2_pp0) {
+                                    let d = if b >= a { b - a } else { (u32::MAX as u64 - a) + b + 1 };
+                                    r.rapl_cores_w = Some(d as f64 * e_unit / dt);
+                                }
+                                if let (Some(a), Some(b)) = (e1_pp1, e2_pp1) {
+                                    let d = if b >= a { b - a } else { (u32::MAX as u64 - a) + b + 1 };
+                                    r.rapl_uncore_w = Some(d as f64 * e_unit / dt);
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        r.status = format!("IntelMSR load err 0x{:08X}", e as u32);
+                    }
+                }
+            }
+        }
+    } else if let Some(amd_blob) = load_verified_module("AMDFamily17.bin", HASH_AMD_FAM17, EMBED_AMD_FAM17) {
+        // 1B. AMD Ryzen Family 17h-1Ah (Tctl/Tdie + RAPL)
+        if let Ok(conn) = PawnConn::open(lib.as_ref()) {
+            if conn.load_blob(&amd_blob).is_ok() {
+                r.active = true;
+                loaded_parts.push("AMDFamily17");
+                let mtx_name = to_wide(r"Global\Access_PCI");
+                let mtx = unsafe { CreateMutexW(ptr::null_mut(), 0, mtx_name.as_ptr()) };
+                let locked = if !mtx.is_null() {
+                    unsafe { WaitForSingleObject(mtx, 200) == WAIT_OBJECT_0 }
+                } else {
+                    true
+                };
+                if locked {
+                    let mut out = [0u64; 1];
+                    if conn.exec("ioctl_read_smn", &[0x0005_9800], &mut out) {
+                        let raw = out[0] as u32;
+                        let mut temp = ((raw >> 21) as f64) * 0.125;
+                        if (raw & (1 << 19)) != 0 {
+                            temp -= 49.0;
+                        }
+                        if temp > -20.0 && temp < 140.0 {
+                            r.package_temp_c = Some(temp);
                         }
                     }
                     if !mtx.is_null() {
-                        unsafe { CloseHandle(mtx) };
+                        unsafe { ReleaseMutex(mtx) };
                     }
                 }
-                unsafe { (lib.close)(h) };
+                if !mtx.is_null() {
+                    unsafe { CloseHandle(mtx) };
+                }
+                let read_msr = |msr: u64| -> Option<u64> {
+                    let mut out = [0u64; 1];
+                    if conn.exec("ioctl_read_msr", &[msr], &mut out) { Some(out[0]) } else { None }
+                };
+                if let Some(unit_raw) = read_msr(0xC001_0299) {
+                    let e_unit = 0.5_f64.powi(((unit_raw >> 8) & 0x1F) as i32);
+                    let p1 = read_msr(0xC001_029B).map(|v| v & 0xFFFF_FFFF);
+                    let t1 = Instant::now();
+                    std::thread::sleep(Duration::from_millis(150));
+                    let p2 = read_msr(0xC001_029B).map(|v| v & 0xFFFF_FFFF);
+                    let dt = t1.elapsed().as_secs_f64();
+                    if dt > 0.0 {
+                        if let (Some(a), Some(b)) = (p1, p2) {
+                            let d = if b >= a { b - a } else { (u32::MAX as u64 - a) + b + 1 };
+                            r.rapl_pkg_w = Some(d as f64 * e_unit / dt);
+                        }
+                    }
+                }
             }
         }
+    }
+
+    // 2. Intel PCH Thermal (read-only MMIO)
+    if !is_amd {
+        if let Some(pch_blob) = load_verified_module("IntelPCHThermal.bin", HASH_INTEL_PCH, EMBED_INTEL_PCH) {
+            if let Ok(conn) = PawnConn::open(lib.as_ref()) {
+                if conn.load_blob(&pch_blob).is_ok() {
+                    loaded_parts.push("IntelPCH");
+                    let mut out = [0u64; 2];
+                    if conn.exec("ioctl_read_raw", &[], &mut out) {
+                        let raw = out[0];
+                        let route = out[1];
+                        if route == 1 {
+                            let c = (raw & 0x1FF) as f64 * 0.5 - 50.0;
+                            if c > 0.0 && c < 130.0 {
+                                r.pch_temp_c = Some(c);
+                            }
+                        } else if route == 2 && (raw & (1 << 31)) != 0 {
+                            let c = (raw & 0xFF) as f64;
+                            if c > 0.0 && c < 130.0 {
+                                r.pch_temp_c = Some(c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. ThinkPad EC Read-Only (LpcThinkpadEC 0x1600/0x1604 first, LpcACPIEC 0x62/0x66 fallback; NEVER writes 0x81)
+    if read_thinkpad_ec {
+        let mut ec_choice: Option<(PawnConn, u64, u64, &str)> = None;
+        if let Some(tp_blob) = load_verified_module("LpcThinkpadEC.bin", HASH_THINKPAD_EC, EMBED_THINKPAD_EC) {
+            if let Ok(conn) = PawnConn::open(lib.as_ref()) {
+                if conn.load_blob(&tp_blob).is_ok() {
+                    ec_choice = Some((conn, 0x1600, 0x1604, "ThinkPadEC"));
+                }
+            }
+        }
+        if ec_choice.is_none() {
+            if let Some(acpi_blob) = load_verified_module("LpcACPIEC.bin", HASH_ACPI_EC, EMBED_ACPI_EC) {
+                if let Ok(conn) = PawnConn::open(lib.as_ref()) {
+                    if conn.load_blob(&acpi_blob).is_ok() {
+                        ec_choice = Some((conn, 0x62, 0x66, "ACPIEC"));
+                    }
+                }
+            }
+        }
+
+        if let Some((conn, dport, cport, tag)) = ec_choice {
+            loaded_parts.push(tag);
+            let mtx_name = to_wide(r"Global\Access_EC");
+            let mtx = unsafe { CreateMutexW(ptr::null_mut(), 0, mtx_name.as_ptr()) };
+            let locked = if !mtx.is_null() {
+                unsafe { WaitForSingleObject(mtx, 200) == WAIT_OBJECT_0 }
+            } else {
+                true
+            };
+            if locked {
+                if let (Some(lo), Some(hi)) = (
+                    read_ec_byte_readonly(&conn, dport, cport, 0x84),
+                    read_ec_byte_readonly(&conn, dport, cport, 0x85),
+                ) {
+                    let rpm = ((hi as u16) << 8) | (lo as u16);
+                    if rpm < 15_000 {
+                        r.tp_fan_rpm = Some(rpm);
+                    }
+                }
+                if let Some(ctl) = read_ec_byte_readonly(&conn, dport, cport, 0x2F) {
+                    r.tp_fan_mode = Some(match ctl {
+                        0x80 => "BIOS auto (0x80)".to_string(),
+                        0x40 => "Disengaged (0x40)".to_string(),
+                        lvl if lvl <= 7 => format!("Level {lvl}"),
+                        other => format!("0x{other:02X}"),
+                    });
+                }
+                for (off, label) in [
+                    (0x78, "EC CPU"),
+                    (0x79, "EC APS"),
+                    (0x7A, "EC CRD"),
+                    (0x7B, "EC GPU"),
+                    (0x7E, "EC BAT"),
+                    (0xC0, "EC BUS"),
+                    (0xC1, "EC PCI"),
+                    (0xC2, "EC PWR"),
+                ] {
+                    if let Some(b) = read_ec_byte_readonly(&conn, dport, cport, off) {
+                        let t = (b as i8) as i32;
+                        if t > 0 && t < 125 {
+                            r.tp_ec_temps.push((label.to_string(), t));
+                        }
+                    }
+                }
+                if !mtx.is_null() {
+                    unsafe { ReleaseMutex(mtx) };
+                }
+            }
+            if !mtx.is_null() {
+                unsafe { CloseHandle(mtx) };
+            }
+        }
+    }
+
+    if !loaded_parts.is_empty() {
+        r.status = format!("PawnIO ({})", loaded_parts.join(" + "));
+    } else if r.status.is_empty() {
+        r.status = "PawnIO open, no compatible silicon module".to_string();
     }
     r
 }
@@ -1596,6 +1849,10 @@ pub struct WindowsTelemetry {
     pub max_cpu_pct: Option<u32>,
     pub c_drive_free_gb: f64,
     pub lenovo_odometer: Option<LenovoOdometer>,
+    pub ram_spec: String,
+    pub display_mode: String,
+    pub brightness_pct: Option<i64>,
+    pub has_wwan_gnss: bool,
     pub external: ExternalSensors,
     pub pawnio: PawnIoReadings,
 }
@@ -1641,14 +1898,47 @@ pub fn collect(pdh_mon: &mut Option<PdhMonitor>, is_l15: bool, allow_ec: bool) -
     }
     if let Some(gpu) = win_wmi::query(
         r"root\CIMV2",
-        "SELECT Name, DriverVersion FROM Win32_VideoController",
-        &["Name", "DriverVersion"],
+        "SELECT Name, DriverVersion, CurrentHorizontalResolution, CurrentVerticalResolution, CurrentRefreshRate FROM Win32_VideoController",
+        &["Name", "DriverVersion", "CurrentHorizontalResolution", "CurrentVerticalResolution", "CurrentRefreshRate"],
     )
     .into_iter()
     .next()
     {
         t.gpu_name = gpu.get("Name").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
         t.gpu_driver = gpu.get("DriverVersion").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if let (Some(w), Some(h), Some(hz)) = (
+            gpu.get("CurrentHorizontalResolution").and_then(|v| v.as_i64()),
+            gpu.get("CurrentVerticalResolution").and_then(|v| v.as_i64()),
+            gpu.get("CurrentRefreshRate").and_then(|v| v.as_i64()),
+        ) {
+            t.display_mode = format!("{w}x{h} @ {hz}Hz");
+        }
+    }
+    if let Some(br) = win_wmi::query(r"root\WMI", "SELECT CurrentBrightness FROM WmiMonitorBrightness", &["CurrentBrightness"])
+        .into_iter()
+        .next()
+    {
+        t.brightness_pct = br.get("CurrentBrightness").and_then(|v| v.as_i64());
+    }
+    let dimms = win_wmi::query(
+        r"root\CIMV2",
+        "SELECT Capacity, Manufacturer, Speed FROM Win32_PhysicalMemory",
+        &["Capacity", "Manufacturer", "Speed"],
+    );
+    if !dimms.is_empty() {
+        let count = dimms.len();
+        let per_gb = dimms.first().and_then(|d| d.get("Capacity")).and_then(|v| v.as_i64()).unwrap_or(0) / 1_073_741_824;
+        let mfg = dimms.first().and_then(|d| d.get("Manufacturer")).and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        let spd = dimms.first().and_then(|d| d.get("Speed")).and_then(|v| v.as_i64()).unwrap_or(0);
+        t.ram_spec = format!("{count}x{per_gb} GB {mfg} DDR4-{spd}").trim().to_string();
+    }
+    if is_l15 {
+        t.has_wwan_gnss = !win_wmi::query(
+            r"root\CIMV2",
+            "SELECT Name FROM Win32_PnPEntity WHERE PNPClass='Sensor' AND Status='OK'",
+            &["Name"],
+        )
+        .is_empty();
     }
 
     // CallNtPowerInformation(ProcessorInformation = 11)
@@ -1754,7 +2044,7 @@ pub fn collect(pdh_mon: &mut Option<PdhMonitor>, is_l15: bool, allow_ec: bool) -
     read_hwinfo_registry(&mut t.external);
     read_lhm_wmi(&mut t.external);
     t.external.nvml = read_nvml();
-    t.pawnio = probe_pawnio(&t.topology, is_l15 && allow_ec);
+    t.pawnio = probe_pawnio(&t.topology, &t.cpu_name, is_l15 && allow_ec);
     t
 }
 
