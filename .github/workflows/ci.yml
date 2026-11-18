@@ -25,6 +25,21 @@ jobs:
         run: cargo test --release --offline --locked
       - name: Build release binaries (zero on-the-fly compilation)
         run: cargo build --release --offline --locked --target ${{ matrix.target }}
+      - name: Verify macOS .icns generation (16..1024px)
+        if: matrix.target == 'aarch64-apple-darwin'
+        run: |
+          mkdir -p AppIcon.iconset
+          sips -z 16 16     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_16x16.png >/dev/null
+          sips -z 32 32     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_16x16@2x.png >/dev/null
+          sips -z 32 32     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_32x32.png >/dev/null
+          sips -z 64 64     assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_32x32@2x.png >/dev/null
+          sips -z 128 128   assets/icons/sensors-gorilla-256.png  --out AppIcon.iconset/icon_128x128.png >/dev/null
+          cp assets/icons/sensors-gorilla-256.png                      AppIcon.iconset/icon_128x128@2x.png
+          cp assets/icons/sensors-gorilla-256.png                      AppIcon.iconset/icon_256x256.png
+          cp assets/icons/sensors-gorilla-512.png                      AppIcon.iconset/icon_256x256@2x.png
+          cp assets/icons/sensors-gorilla-512.png                      AppIcon.iconset/icon_512x512.png
+          cp assets/icons/sensors-gorilla-1024.png                     AppIcon.iconset/icon_512x512@2x.png
+          iconutil -c icns AppIcon.iconset -o AppIcon.icns
       - name: Smoke-test native binaries
         if: matrix.target != 'x86_64-apple-darwin'
         shell: bash

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=sensors.gorilla
+Comment=Live terminal hardware sensor dashboard
+Exec=sensors.gorilla
+Icon=sensors-gorilla
+Terminal=true
+Categories=System;Monitor;

@@ -1,8 +1,6 @@
 #!/bin/bash
-# Version: 3.0.0 · updated 26-11-18-02-45
-# Install sensors.gorilla on Linux or macOS without on-the-fly compilation.
-# Prefers the compiled native binary (from release download or `cargo build --release --offline --locked`),
-# and if installing the Python fallback, precompiles bytecode (.pyc) ahead of time.
+# Version: 3.0.0 · updated 26-11-18-02-52
+# Install sensors.gorilla + desktop/app icons on Linux or macOS without on-the-fly compilation.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -11,9 +9,8 @@ DEST="$INSTALL_DIR/sensors.gorilla"
 mkdir -p "$INSTALL_DIR"
 
 OS="$(uname -s)"
-ARCH="$(uname -m)"
 
-# 1. Prebuilt native compiled binary next to this script
+# 1. Install compiled native binary (zero on-the-fly compilation)
 PREBUILT=""
 if [ "$OS" = "Linux" ] && [ -f "$HERE/sensors-gorilla-linux-x86_64" ]; then
     PREBUILT="$HERE/sensors-gorilla-linux-x86_64"
@@ -37,7 +34,6 @@ elif command -v cargo >/dev/null 2>&1 && [ -f "$HERE/Cargo.toml" ]; then
     ln -sf "$DEST" "$INSTALL_DIR/sensors-gorilla"
     echo "Built and installed compiled native binary -> $DEST"
 elif [ -f "$HERE/sensors.gorilla" ]; then
-    # Precompile Python bytecode ahead of time so Python never compiles the module on every run
     LIB_DIR="$HOME/.local/lib/sensors-gorilla"
     mkdir -p "$LIB_DIR"
     cp "$HERE/sensors.gorilla" "$LIB_DIR/sensors_gorilla_app.py"
@@ -53,6 +49,25 @@ EOF
 else
     echo "error: no compiled binary or source found in $HERE" >&2
     exit 1
+fi
+
+# 2. Install desktop icon (>256px) and desktop entry on Linux
+if [ "$OS" = "Linux" ]; then
+    if [ -f "$HERE/assets/icons/sensors-gorilla-256.png" ]; then
+        mkdir -p "$HOME/.local/share/icons/hicolor/256x256/apps"
+        cp "$HERE/assets/icons/sensors-gorilla-256.png" "$HOME/.local/share/icons/hicolor/256x256/apps/sensors-gorilla.png"
+    fi
+    if [ -f "$HERE/assets/icons/sensors-gorilla-512.png" ]; then
+        mkdir -p "$HOME/.local/share/icons/hicolor/512x512/apps"
+        cp "$HERE/assets/icons/sensors-gorilla-512.png" "$HOME/.local/share/icons/hicolor/512x512/apps/sensors-gorilla.png"
+    fi
+    if [ -f "$HERE/assets/sensors-gorilla.desktop" ]; then
+        mkdir -p "$HOME/.local/share/applications"
+        cp "$HERE/assets/sensors-gorilla.desktop" "$HOME/.local/share/applications/sensors-gorilla.desktop"
+    fi
+    if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+        gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" >/dev/null 2>&1 || true
+    fi
 fi
 
 "$DEST" --version

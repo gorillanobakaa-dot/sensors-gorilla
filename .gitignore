@@ -9,6 +9,7 @@ target-*/
 dist/
 installer/output/
 pawnio/*.bin
+state/
 
 # C extensions
 *.so

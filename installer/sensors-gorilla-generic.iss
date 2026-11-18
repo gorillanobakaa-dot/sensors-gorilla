@@ -16,6 +16,8 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 MinVersion=10.0.17763
+SetupIconFile=..\assets\icons\sensors-gorilla.ico
+UninstallDisplayIcon={app}\sensors-gorilla.ico
 OutputDir=output
 OutputBaseFilename=sensors-gorilla-{#AppVersion}-win64-generic-installer
 Compression=lzma2/max
@@ -23,8 +25,12 @@ SolidCompression=yes
 WizardStyle=modern
 ChangesEnvironment=yes
 
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional shortcuts:"
+
 [Files]
 Source: "..\target\x86_64-pc-windows-msvc\release\sensors-gorilla.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\assets\icons\sensors-gorilla.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\pawnio\IntelMSR.bin"; DestDir: "{app}\pawnio"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\pawnio\IntelPCHThermal.bin"; DestDir: "{app}\pawnio"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "..\pawnio\AMDFamily17.bin"; DestDir: "{app}\pawnio"; Flags: ignoreversion skipifsourcedoesntexist
@@ -32,8 +38,9 @@ Source: "..\pawnio\COPYING"; DestDir: "{app}\pawnio"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\sensors.gorilla (Generic Windows)"; Filename: "wt.exe"; Parameters: """{app}\{#AppExe}"""; IconFilename: "{app}\{#AppExe}"
-Name: "{group}\sensors.gorilla (Command Prompt)"; Filename: "{app}\{#AppExe}"
+Name: "{group}\sensors.gorilla (Generic Windows)"; Filename: "wt.exe"; Parameters: """{app}\{#AppExe}"""; IconFilename: "{app}\sensors-gorilla.ico"
+Name: "{group}\sensors.gorilla (Command Prompt)"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\sensors-gorilla.ico"
+Name: "{autodesktop}\sensors.gorilla (Generic)"; Filename: "wt.exe"; Parameters: """{app}\{#AppExe}"""; IconFilename: "{app}\sensors-gorilla.ico"; Tasks: desktopicon
 Name: "{group}\Uninstall sensors.gorilla Generic"; Filename: "{uninstallexe}"
 
 [Registry]
