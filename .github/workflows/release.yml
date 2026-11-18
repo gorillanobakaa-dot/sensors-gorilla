@@ -99,7 +99,7 @@ jobs:
         run: |
           v=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
           test "v$v" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME != Cargo.toml $v"; exit 1; }
-          test -s "releases/$GITHUB_REF_NAME.md" || { echo "releases/$GITHUB_REF_NAME.md missing"; exit 1; }
+          test -s "releases/notes/$GITHUB_REF_NAME/page.md" || { echo "releases/notes/$GITHUB_REF_NAME/page.md missing"; exit 1; }
       - uses: actions/download-artifact@v4
       - name: Assemble all OS release assets and SHA256SUMS
         run: |
@@ -117,6 +117,19 @@ jobs:
           cp thermal-profile-daemon.README.md out/thermal-profile-daemon.README.md
           chmod +x out/sensors-gorilla-linux-x86_64 out/thermal-profile-daemon-linux-x86_64 out/sensors-gorilla-macos-x86_64 out/sensors-gorilla-macos-universal out/recreate_success.sh
           cd out && sha256sum * > SHA256SUMS && cat SHA256SUMS
+          python3 - <<'PY'
+          import os, pathlib, re
+          page_p = pathlib.Path(f"../releases/notes/{os.environ['GITHUB_REF_NAME']}/page.md")
+          text = page_p.read_text(encoding="utf-8")
+          rows = []
+          for line in pathlib.Path("SHA256SUMS").read_text().splitlines():
+              sha, name = line.split(None, 1)
+              sz = pathlib.Path(name).stat().st_size
+              rows.append(f"| `{name}` | {sz:,} | `{sha}` |")
+          table = "| File | Bytes | SHA-256 |\n|---|---|---|\n" + "\n".join(rows)
+          new_text = re.sub(r"\| File \| Bytes \| SHA-256 \|\n\|---\|---\|---\|\n\|[^\n]*\|", table, text, count=1)
+          pathlib.Path("../release_page.md").write_text(new_text, encoding="utf-8")
+          PY
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" out/* --title "sensors.gorilla $GITHUB_REF_NAME" --notes-file "releases/$GITHUB_REF_NAME.md"
+        run: gh release create "$GITHUB_REF_NAME" out/* --title "sensors.gorilla $GITHUB_REF_NAME" --notes-file release_page.md
