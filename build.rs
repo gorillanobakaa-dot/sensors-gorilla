@@ -32,6 +32,7 @@ fn find_rc_exe() -> Option<PathBuf> {
 fn main() {
     println!("cargo:rerun-if-changed=assets/icons/app.rc");
     println!("cargo:rerun-if-changed=assets/icons/sensors-gorilla.ico");
+    println!("cargo:rerun-if-changed=assets/icons/sensors-gorilla.manifest");
 
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
