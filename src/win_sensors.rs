@@ -1893,7 +1893,7 @@ pub fn probe_pawnio(topo: &CoreTopology, cpu_name: &str, read_thinkpad_ec: bool)
                 ] {
                     if let Some(b) = read_ec_byte_readonly(conn, dport, cport, off) {
                         let t = (b as i8) as i32;
-                        if t > 0 && t < 125 {
+                        if t >= 15 && t < 120 {
                             r.tp_ec_temps.push((label.to_string(), t));
                             got_any = true;
                         }

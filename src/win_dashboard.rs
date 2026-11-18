@@ -76,8 +76,8 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
 
     if is_l15 {
         left.push(format!(
-            "  {:<44} : {}",
-            "CPU/Iris Xe Package (i7-1255U 2P+8E)",
+            "  {:<34} : {}",
+            "CPU/Iris Xe Package (i7-1255U)",
             ansi::fmt_temp(pkg_temp, 75.0, 90.0, cap)
         ));
     } else {
@@ -89,36 +89,81 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
                 .replace("13th Gen Intel(R) Core(TM) ", "Intel ")
                 .replace("(R)", "")
                 .replace("(TM)", "");
-            format!("CPU Package ({})", short.trim().chars().take(29).collect::<String>())
+            format!("CPU Pkg ({})", short.trim().chars().take(24).collect::<String>())
         };
         left.push(format!(
-            "  {:<44} : {}",
+            "  {:<34} : {}",
             cpu_lbl,
             ansi::fmt_temp(pkg_temp, 75.0, 90.0, cap)
         ));
     }
 
+    let fmt_core_chip = |prefix: &str, cid: usize, temp: f64| -> String {
+        let rgb = ansi::thermal_rgb(temp, 42.0, 75.0, 90.0);
+        format!("{prefix}{cid} {}", ansi::paint(&format!("{temp:.0}°C"), rgb, true, cap))
+    };
+
     if !t.pawnio.core_temps_c.is_empty() {
-        for (cid, is_p, temp) in &t.pawnio.core_temps_c {
-            let tag = if t.topology.e_cores > 0 {
-                if *is_p { format!("P-Core {cid}") } else { format!("E-Core {cid}") }
-            } else {
-                format!("Core {cid}")
-            };
-            left.push(format!(
-                "  {} {:<41} : {}",
-                ansi::paint("├─", ansi::COL_TREE, false, cap),
-                tag,
-                ansi::fmt_temp(Some(*temp), 75.0, 90.0, cap)
-            ));
+        if t.topology.e_cores > 0 {
+            let p_list: Vec<String> = t
+                .pawnio
+                .core_temps_c
+                .iter()
+                .filter(|(_, is_p, _)| *is_p)
+                .map(|(cid, _, temp)| fmt_core_chip("P", *cid, *temp))
+                .collect();
+            if !p_list.is_empty() {
+                left.push(format!(
+                    "  {} {:<31} : {}",
+                    ansi::paint("├─", ansi::COL_TREE, false, cap),
+                    format!("P-Cores ({}P)", p_list.len()),
+                    p_list.join(" · ")
+                ));
+            }
+            let e_all: Vec<(usize, f64)> = t
+                .pawnio
+                .core_temps_c
+                .iter()
+                .filter(|(_, is_p, _)| !*is_p)
+                .map(|(cid, _, temp)| (*cid, *temp))
+                .collect();
+            for chunk in e_all.chunks(4) {
+                let first = chunk.first().map(|(c, _)| *c).unwrap_or(0);
+                let last = chunk.last().map(|(c, _)| *c).unwrap_or(0);
+                let vals: Vec<String> = chunk
+                    .iter()
+                    .map(|(cid, temp)| fmt_core_chip("E", *cid, *temp))
+                    .collect();
+                left.push(format!(
+                    "  {} {:<31} : {}",
+                    ansi::paint("├─", ansi::COL_TREE, false, cap),
+                    format!("E-Cores ({first}-{last})"),
+                    vals.join(" · ")
+                ));
+            }
+        } else {
+            for chunk in t.pawnio.core_temps_c.chunks(4) {
+                let first = chunk.first().map(|(c, _, _)| *c).unwrap_or(0);
+                let last = chunk.last().map(|(c, _, _)| *c).unwrap_or(0);
+                let vals: Vec<String> = chunk
+                    .iter()
+                    .map(|(cid, _, temp)| fmt_core_chip("C", *cid, *temp))
+                    .collect();
+                left.push(format!(
+                    "  {} {:<31} : {}",
+                    ansi::paint("├─", ansi::COL_TREE, false, cap),
+                    format!("Cores ({first}-{last})"),
+                    vals.join(" · ")
+                ));
+            }
         }
     } else if !t.external.lhm_temps.is_empty() {
-        for (k, v) in t.external.lhm_temps.iter().take(10) {
+        for (k, v) in t.external.lhm_temps.iter().take(6) {
             if k.contains("Core") || k.contains("CCD") || k.contains("Tdie") {
                 left.push(format!(
-                    "  {} {:<41} : {}",
+                    "  {} {:<31} : {}",
                     ansi::paint("├─", ansi::COL_TREE, false, cap),
-                    k,
+                    k.chars().take(31).collect::<String>(),
                     ansi::fmt_temp(Some(*v), 75.0, 90.0, cap)
                 ));
             }
@@ -127,7 +172,7 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
 
     if let Some(pch) = t.pawnio.pch_temp_c {
         left.push(format!(
-            "  {} {:<41} : {}",
+            "  {} {:<31} : {}",
             ansi::paint("├─", ansi::COL_TREE, false, cap),
             "Motherboard / PCH Chipset",
             ansi::fmt_temp(Some(pch), 70.0, 85.0, cap)
@@ -136,12 +181,12 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
 
     for tz in &t.pdh.thermal_zones {
         let zname = if tz.name.contains("THM0") {
-            "Chassis / ACPI Zone (\\_TZ.THM0)".to_string()
+            "Chassis / ACPI (\\_TZ.THM0)".to_string()
         } else {
-            format!("ACPI Thermal Zone ({})", tz.name)
+            format!("ACPI Thermal ({})", tz.name.chars().take(16).collect::<String>())
         };
         left.push(format!(
-            "  {} {:<41} : {}",
+            "  {} {:<31} : {}",
             ansi::paint("├─", ansi::COL_TREE, false, cap),
             zname,
             ansi::fmt_temp(Some(tz.temp_c), 70.0, 85.0, cap)
@@ -157,7 +202,7 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
             .collect::<Vec<_>>()
             .join(" · ");
         left.push(format!(
-            "  {} {:<41} : {}",
+            "  {} {:<31} : {}",
             ansi::paint("├─", ansi::COL_TREE, false, cap),
             "ThinkPad EC Board Sensors",
             ansi::paint(&summary, ansi::COL_SUBHEADER, false, cap)
@@ -166,7 +211,7 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
 
     if let Some(bt) = t.battery_temp_c {
         left.push(format!(
-            "  {} {:<41} : {}",
+            "  {} {:<31} : {}",
             ansi::paint("├─", ansi::COL_TREE, false, cap),
             "Battery Pack Temperature",
             ansi::fmt_temp(Some(bt), 45.0, 60.0, cap)
@@ -175,9 +220,9 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
 
     for (label, tc) in &t.wmi_probes {
         left.push(format!(
-            "  {} {:<41} : {}",
+            "  {} {:<31} : {}",
             ansi::paint("├─", ansi::COL_TREE, false, cap),
-            label.chars().take(41).collect::<String>(),
+            label.chars().take(31).collect::<String>(),
             ansi::fmt_temp(Some(*tc), 70.0, 85.0, cap)
         ));
     }
@@ -185,18 +230,18 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
     if let Some(nv) = &t.external.nvml {
         let gname = if nv.name.is_empty() { "NVIDIA GPU" } else { nv.name.as_str() };
         left.push(format!(
-            "  {} {:<41} : {}",
+            "  {} {:<31} : {}",
             ansi::paint("├─", ansi::COL_TREE, false, cap),
-            gname,
+            gname.chars().take(31).collect::<String>(),
             ansi::fmt_temp(nv.temp_c, 75.0, 85.0, cap)
         ));
     } else if !t.gpu_name.is_empty() {
         let g_temp = pkg_temp; // Integrated Intel Iris Xe / UHD shares the CPU package die
         let note = if t.gpu_name.contains("Intel") { " (Shared Die)" } else { "" };
         left.push(format!(
-            "  {} {:<41} : {}{}",
+            "  {} {:<31} : {}{}",
             ansi::paint("├─", ansi::COL_TREE, false, cap),
-            t.gpu_name.chars().take(41).collect::<String>(),
+            t.gpu_name.chars().take(31).collect::<String>(),
             ansi::fmt_temp(g_temp, 75.0, 90.0, cap),
             ansi::paint(note, ansi::COL_MUTED, false, cap)
         ));
@@ -204,7 +249,7 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
 
     if t.drives.is_empty() {
         left.push(format!(
-            "  {} {:<41} : N/A",
+            "  {} {:<31} : N/A",
             ansi::paint("└─", ansi::COL_TREE, false, cap),
             "Storage Drive"
         ));
@@ -214,7 +259,7 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
             let name = if d.model.is_empty() {
                 format!("PhysicalDrive{} ({})", d.index, d.bus_type)
             } else {
-                format!("{} ({})", d.model.chars().take(32).collect::<String>(), d.bus_type)
+                format!("{} ({})", d.model.chars().take(24).collect::<String>(), d.bus_type)
             };
             let extra = d
                 .extra_temps_c
@@ -222,7 +267,7 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
                 .map(|s| format!("  (Sensor 1: {s:.1}°C)"))
                 .unwrap_or_default();
             left.push(format!(
-                "  {} {:<41} : {}{}",
+                "  {} {:<31} : {}{}",
                 ansi::paint(branch, ansi::COL_TREE, false, cap),
                 name,
                 ansi::fmt_temp(d.temp_c, 55.0, 70.0, cap),
@@ -517,19 +562,39 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
         ));
     }
     if !t.pdh.net_active_iface.is_empty() {
+        let short_nic = t
+            .pdh
+            .net_active_iface
+            .replace("[R]", "")
+            .replace("(R)", "")
+            .replace("  ", " ");
         right.push(format!(
-            "  Network Link & Throughput   : {} ({:.0} Mbps)  |  RX {:.1} KB/s  TX {:.1} KB/s",
-            t.pdh.net_active_iface.chars().take(30).collect::<String>(),
+            "  Network Link & Throughput   : {} ({:.0} Mbps)  |  RX {:.1} TX {:.1} KB/s",
+            short_nic.trim().chars().take(26).collect::<String>(),
             t.pdh.net_link_mbps,
             t.pdh.net_rx_kbps,
             t.pdh.net_tx_kbps
         ));
     }
     if !t.hardware_badges.is_empty() {
-        right.push(format!(
-            "  Platform Sensors & Devices  : {}",
-            ansi::paint(&t.hardware_badges.join(" · "), ansi::COL_SUBHEADER, false, cap)
-        ));
+        let mid = (t.hardware_badges.len() + 1) / 2;
+        let line1 = t.hardware_badges[..mid].join(" · ");
+        let line2 = t.hardware_badges[mid..].join(" · ");
+        if line2.is_empty() {
+            right.push(format!(
+                "  Platform Sensors & Devices  : {}",
+                ansi::paint(&line1, ansi::COL_SUBHEADER, false, cap)
+            ));
+        } else {
+            right.push(format!(
+                "  Platform Sensors & Buses    : {}",
+                ansi::paint(&line1, ansi::COL_SUBHEADER, false, cap)
+            ));
+            right.push(format!(
+                "  Integrated I/O & Security   : {}",
+                ansi::paint(&line2, ansi::COL_SUBHEADER, false, cap)
+            ));
+        }
     }
 
     if is_l15 {
@@ -567,7 +632,8 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
         format!("WINDOWS GORILLA SYSTEM DASHBOARD   v{}", ansi::VERSION)
     };
     let hint_cmd = if is_l15 { "sensors-gorilla-l15" } else { "sensors-gorilla" };
-    ansi::assemble_dashboard(&left, &right, &label, cols, rows, hint_cmd, false, cap)
+    let compact = rows < 500_000;
+    ansi::assemble_dashboard(&left, &right, &label, cols, rows, hint_cmd, compact, cap)
 }
 
 pub fn render_json(t: &WindowsTelemetry, is_l15: bool) -> String {

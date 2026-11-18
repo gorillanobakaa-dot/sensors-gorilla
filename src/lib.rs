@@ -112,11 +112,12 @@ pub fn run_app(is_l15_windows: bool) {
             return;
         }
         let mut out = io::BufWriter::with_capacity(65_536, io::stdout());
-        let _ = out.write_all(b"\x1b[?25l\x1b[2J\x1b[H");
+        let _ = out.write_all(b"\x1b[?1049h\x1b[?25l\x1b[2J\x1b[H");
+        let _ = out.flush();
         let mut last_size = (0usize, 0usize);
         while !win_sensors::ctrl_c_pressed() {
             let cur_size = win_sensors::terminal_size().unwrap_or((0, 0));
-            let cols = cur_size.0;
+            let (cols, rows) = cur_size;
             let snap = win_sensors::collect(&mut pdh_mon, is_l15_windows, !opts.no_ec);
             let frame = win_dashboard::render(&snap, is_l15_windows);
             let mut buf = String::with_capacity(frame.len() + 512);
@@ -126,14 +127,15 @@ pub fn run_app(is_l15_windows: bool) {
             }
             last_size = cur_size;
             buf.push_str("\x1b[H");
-            for line in frame.lines() {
+            let max_body = if rows > 2 { rows - 1 } else { usize::MAX };
+            for line in frame.lines().take(max_body) {
                 buf.push_str(line);
                 buf.push_str("\x1b[K\n");
             }
             let footer = format!(
                 "Refreshed every {:.1}s{} · 24-bit TrueColor. Press Ctrl+C to exit.",
                 opts.interval,
-                if cols > 0 { format!(" · window {cols} cols, redraws on resize") } else { String::new() }
+                if cols > 0 { format!(" · window {cols}x{rows}, redraws on resize") } else { String::new() }
             );
             buf.push_str(&footer);
             buf.push_str("\x1b[K\x1b[J\x1b[?2026l");
@@ -141,7 +143,7 @@ pub fn run_app(is_l15_windows: bool) {
             let _ = out.flush();
             win_sensors::wait_resize_or_timeout((opts.interval * 1000.0) as u32);
         }
-        let _ = out.write_all(b"\x1b[?25h\nExiting dashboard.\n");
+        let _ = out.write_all(b"\x1b[?25h\x1b[?1049l\nExiting dashboard.\n");
         let _ = out.flush();
     }
 
