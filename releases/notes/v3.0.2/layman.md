@@ -2,10 +2,10 @@
 
 ## What changed for you
 
-- **Running the downloaded `.exe` as Administrator now reveals CPU core temperatures, CPU wattage, chipset temperature, and fan speed immediately.** In `v3.0.1`, the PawnIO sensor modules were only loaded from a folder next to the `.exe`, so running the standalone `.exe` from `Downloads` showed `N/A` even as Administrator. In `v3.0.2`, those signed read-only modules are compiled right inside the `.exe` (and checked with SHA-256 before loading), and the `PawnIO` driver is started automatically if it was stopped.
-- **No more flashing while running.** Instead of wiping the whole screen blank every 2 seconds before drawing, the dashboard now updates lines smoothly in place with the cursor hidden — matching the Linux terminal experience on both classic Windows Console (`conhost.exe`) and Windows Terminal.
-- **More ThinkPad L15 & Windows hardware details exposed.** Added memory DIMM count, size, vendor, and DDR speed (`2x32 GB SK Hynix DDR4-3200`), panel resolution, refresh rate, and brightness percentage (`1920x1080 @ 60Hz (69% bright)`), plus active network adapter link speed and live RX/TX throughput.
-- **Better diagnostics.** If PawnIO is not installed or not run as Administrator, the dashboard prints the exact reason instead of a generic message.
+- **Starts elevated automatically with UAC.** Both Windows executables now embed a `requireAdministrator` manifest, so double-clicking or launching them pops up the Windows UAC prompt and runs elevated right away without needing right-click -> "Run as administrator".
+- **Standalone `.exe` reveals CPU core temperatures, CPU wattage, chipset temperature, and fan speed immediately.** Signed read-only PawnIO sensor modules are compiled inside the `.exe` (verified with SHA-256 before loading), `PawnIO` starts automatically if stopped, and ThinkPad EC automatically falls back from `0x1600/0x1604` to standard ACPI EC `0x62/0x66`.
+- **Full Windows sensor & hardware exposure.** Adds Windows PDH `Energy Meter` RAPL (`PKG` / `PP0` Cores / `PP1` Iris Xe / `DRAM`), `Power Meter` total system draw, CPU `C1/C2/C3` deep sleep percentages, memory DIMM layout (`2x32 GB SK Hynix DDR4-3200`), panel resolution/Hz/brightness, active Wi-Fi/Ethernet link speed and RX/TX KB/s, and enumerated platform devices (`IPF SEN1..SEN6`, `Intel PMT`, `Lenovo ITS`, `TPM 2.0`, `Quectel LTE/GNSS`, cameras, biometric, audio).
+- **No more flashing while running.** Updates lines smoothly in place with cursor hidden — matching the Linux terminal experience on both classic Windows Console (`conhost.exe`) and Windows Terminal.
 
 ## Two Windows editions and all OSes in one place
 

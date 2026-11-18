@@ -164,6 +164,24 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
         ));
     }
 
+    if let Some(bt) = t.battery_temp_c {
+        left.push(format!(
+            "  {} {:<41} : {}",
+            ansi::paint("├─", ansi::COL_TREE, false, cap),
+            "Battery Pack Temperature",
+            ansi::fmt_temp(Some(bt), 45.0, 60.0, cap)
+        ));
+    }
+
+    for (label, tc) in &t.wmi_probes {
+        left.push(format!(
+            "  {} {:<41} : {}",
+            ansi::paint("├─", ansi::COL_TREE, false, cap),
+            label.chars().take(41).collect::<String>(),
+            ansi::fmt_temp(Some(*tc), 70.0, 85.0, cap)
+        ));
+    }
+
     if let Some(nv) = &t.external.nvml {
         let gname = if nv.name.is_empty() { "NVIDIA GPU" } else { nv.name.as_str() };
         left.push(format!(
@@ -249,13 +267,19 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
         ));
     }
 
-    if let Some(pkg_w) = t.pawnio.rapl_pkg_w {
+    let rapl_pkg = t.pawnio.rapl_pkg_w.or(t.pdh.energy_pkg_w);
+    let rapl_cores = t.pawnio.rapl_cores_w.or(t.pdh.energy_pp0_w);
+    let rapl_uncore = t.pawnio.rapl_uncore_w.or(t.pdh.energy_pp1_w);
+    if let Some(pkg_w) = rapl_pkg {
         let mut parts = Vec::new();
-        if let Some(c) = t.pawnio.rapl_cores_w {
+        if let Some(c) = rapl_cores {
             parts.push(format!("cores {c:.1}"));
         }
-        if let Some(u) = t.pawnio.rapl_uncore_w {
-            parts.push(format!("gpu/uncore {u:.1}"));
+        if let Some(u) = rapl_uncore {
+            parts.push(format!("igpu/uncore {u:.1}"));
+        }
+        if let Some(d) = t.pdh.energy_dram_w {
+            parts.push(format!("dram {d:.1}"));
         }
         let detail = if parts.is_empty() {
             String::new()
@@ -283,6 +307,12 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
             ansi::paint(msg, ansi::COL_MUTED, false, cap)
         ));
     }
+    if let Some(sys_w) = t.pdh.system_power_w {
+        left.push(format!(
+            "  System Power Meter        : {}",
+            ansi::paint(&format!("{sys_w:.1} W"), ansi::COL_POWER, false, cap)
+        ));
+    }
 
     let (max_ghz, p_ghz, e_ghz) = live_cpu_ghz(t);
     if is_l15 && t.topology.e_cores > 0 {
@@ -302,12 +332,29 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
             ansi::paint(&perf_s, ansi::COL_MUTED, false, cap)
         ));
     }
+    if let (Some(c1), Some(c2), Some(c3)) = (t.pdh.cpu_c1_pct, t.pdh.cpu_c2_pct, t.pdh.cpu_c3_pct) {
+        left.push(format!(
+            "  CPU C-State Residency     : C1 {:.1}%  ·  C2 {:.1}%  ·  C3 {:.1}%",
+            c1, c2, c3
+        ));
+    }
 
     let throt_str = if t.pawnio.throttle_pkg_now || !t.pawnio.throttle_reasons.is_empty() {
         ansi::paint(&t.pawnio.throttle_reasons.join(", "), ansi::COL_HOT, true, cap)
     } else if let Some(tr) = t.pdh.thermal_zones.first().and_then(|z| z.throttle_reasons) {
         if tr != 0 {
             ansi::paint(&format!("ACPI throttle mask 0x{tr:X}"), ansi::COL_HOT, false, cap)
+        } else if t.pdh.perf_limit_flags.unwrap_or(0) != 0 && t.pdh.perf_limit_pct.unwrap_or(100.0) < 99.5 {
+            ansi::paint(
+                &format!(
+                    "PPM {:.0}% cap (flags 0x{:X})",
+                    t.pdh.perf_limit_pct.unwrap_or(100.0),
+                    t.pdh.perf_limit_flags.unwrap_or(0)
+                ),
+                ansi::COL_WARM,
+                false,
+                cap,
+            )
         } else {
             ansi::paint("none active", ansi::COL_COOL, false, cap)
         }
@@ -478,6 +525,12 @@ pub fn render(t: &WindowsTelemetry, is_l15: bool) -> String {
             t.pdh.net_tx_kbps
         ));
     }
+    if !t.hardware_badges.is_empty() {
+        right.push(format!(
+            "  Platform Sensors & Devices  : {}",
+            ansi::paint(&t.hardware_badges.join(" · "), ansi::COL_SUBHEADER, false, cap)
+        ));
+    }
 
     if is_l15 {
         if let Some(odo) = &t.lenovo_odometer {
@@ -541,8 +594,14 @@ pub fn render_json(t: &WindowsTelemetry, is_l15: bool) -> String {
             )
         })
         .collect();
+    let badges_json: Vec<String> = t
+        .hardware_badges
+        .iter()
+        .map(|b| format!("\"{}\"", b.replace('"', "\\\"")))
+        .collect();
+    let rapl_pkg_json = t.pawnio.rapl_pkg_w.or(t.pdh.energy_pkg_w);
     format!(
-        "{{\"platform\":\"windows\",\"variant\":\"{}\",\"version\":\"{}\",\"system\":\"{} {}\",\"cpu\":\"{}\",\"p_cores\":{},\"e_cores\":{},\"threads\":{},\"cpu_max_ghz\":{},\"p_core_ghz\":{},\"e_core_ghz\":{},\"cpu_util_pct\":{},\"package_temp_c\":{},\"pch_temp_c\":{},\"rapl_pkg_w\":{},\"fan_rpm\":{},\"thermal_zones\":[{}],\"drives\":[{}],\"battery\":{{\"present\":{},\"ac_online\":{},\"charge_pct\":{},\"health_pct\":{},\"cycles\":{},\"voltage_v\":{},\"rate_w\":{}}},\"memory\":{{\"used_gb\":{:.2},\"total_gb\":{:.2},\"commit_used_gb\":{:.2},\"commit_limit_gb\":{:.2}}}}}",
+        "{{\"platform\":\"windows\",\"variant\":\"{}\",\"version\":\"{}\",\"system\":\"{} {}\",\"cpu\":\"{}\",\"p_cores\":{},\"e_cores\":{},\"threads\":{},\"cpu_max_ghz\":{},\"p_core_ghz\":{},\"e_core_ghz\":{},\"cpu_util_pct\":{},\"package_temp_c\":{},\"pch_temp_c\":{},\"rapl_pkg_w\":{},\"system_power_w\":{},\"fan_rpm\":{},\"thermal_zones\":[{}],\"drives\":[{}],\"hardware_badges\":[{}],\"battery\":{{\"present\":{},\"ac_online\":{},\"charge_pct\":{},\"health_pct\":{},\"cycles\":{},\"voltage_v\":{},\"rate_w\":{}}},\"memory\":{{\"used_gb\":{:.2},\"total_gb\":{:.2},\"commit_used_gb\":{:.2},\"commit_limit_gb\":{:.2}}}}}",
         if is_l15 { "thinkpad-l15-gen3" } else { "generic" },
         ansi::VERSION,
         t.sys_manufacturer.replace('"', "\\\""),
@@ -557,10 +616,12 @@ pub fn render_json(t: &WindowsTelemetry, is_l15: bool) -> String {
         t.pdh.cpu_total_pct.map(|v| format!("{v:.1}")).unwrap_or_else(|| "null".to_string()),
         t.pawnio.package_temp_c.map(|v| format!("{v:.1}")).unwrap_or_else(|| "null".to_string()),
         t.pawnio.pch_temp_c.map(|v| format!("{v:.1}")).unwrap_or_else(|| "null".to_string()),
-        t.pawnio.rapl_pkg_w.map(|v| format!("{v:.2}")).unwrap_or_else(|| "null".to_string()),
+        rapl_pkg_json.map(|v| format!("{v:.2}")).unwrap_or_else(|| "null".to_string()),
+        t.pdh.system_power_w.map(|v| format!("{v:.2}")).unwrap_or_else(|| "null".to_string()),
         t.pawnio.tp_fan_rpm.map(|v| v.to_string()).unwrap_or_else(|| "null".to_string()),
         tz_json.join(","),
         drv_json.join(","),
+        badges_json.join(","),
         t.battery.present,
         t.battery.ac_online,
         t.battery.charge_pct.map(|v| format!("{v:.1}")).unwrap_or_else(|| "null".to_string()),

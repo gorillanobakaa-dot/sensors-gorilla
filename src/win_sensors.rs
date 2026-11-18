@@ -763,6 +763,16 @@ pub struct PdhSample {
     pub cpu_perf_pct: Option<f64>,
     pub per_cpu_perf_pct: BTreeMap<usize, f64>,
     pub per_cpu_util_pct: BTreeMap<usize, f64>,
+    pub energy_pkg_w: Option<f64>,
+    pub energy_pp0_w: Option<f64>,
+    pub energy_pp1_w: Option<f64>,
+    pub energy_dram_w: Option<f64>,
+    pub system_power_w: Option<f64>,
+    pub cpu_c1_pct: Option<f64>,
+    pub cpu_c2_pct: Option<f64>,
+    pub cpu_c3_pct: Option<f64>,
+    pub perf_limit_flags: Option<u32>,
+    pub perf_limit_pct: Option<f64>,
     pub gpu_dedicated_mb: f64,
     pub gpu_shared_mb: f64,
     pub gpu_3d_pct: f64,
@@ -785,6 +795,13 @@ pub struct PdhMonitor {
     c_tz_throttle: PDH_HCOUNTER,
     c_cpu_util: PDH_HCOUNTER,
     c_cpu_perf: PDH_HCOUNTER,
+    c_energy_pwr: PDH_HCOUNTER,
+    c_sys_pwr: PDH_HCOUNTER,
+    c_cpu_c1: PDH_HCOUNTER,
+    c_cpu_c2: PDH_HCOUNTER,
+    c_cpu_c3: PDH_HCOUNTER,
+    c_perf_lim_flags: PDH_HCOUNTER,
+    c_perf_lim_pct: PDH_HCOUNTER,
     c_gpu_ded: PDH_HCOUNTER,
     c_gpu_shr: PDH_HCOUNTER,
     c_gpu_eng: PDH_HCOUNTER,
@@ -816,6 +833,13 @@ impl PdhMonitor {
             c_tz_throttle: add(r"\Thermal Zone Information(*)\Throttle Reasons"),
             c_cpu_util: add(r"\Processor Information(*)\% Processor Time"),
             c_cpu_perf: add(r"\Processor Information(*)\% Processor Performance"),
+            c_energy_pwr: add(r"\Energy Meter(*)\Power"),
+            c_sys_pwr: add(r"\Power Meter(_Total)\Power"),
+            c_cpu_c1: add(r"\Processor Information(_Total)\% C1 Time"),
+            c_cpu_c2: add(r"\Processor Information(_Total)\% C2 Time"),
+            c_cpu_c3: add(r"\Processor Information(_Total)\% C3 Time"),
+            c_perf_lim_flags: add(r"\Processor Information(_Total)\Performance Limit Flags"),
+            c_perf_lim_pct: add(r"\Processor Information(_Total)\% Performance Limit"),
             c_gpu_ded: add(r"\GPU Adapter Memory(*)\Dedicated Usage"),
             c_gpu_shr: add(r"\GPU Adapter Memory(*)\Shared Usage"),
             c_gpu_eng: add(r"\GPU Engine(*)\Utilization Percentage"),
@@ -941,6 +965,30 @@ impl PdhMonitor {
                 }
             }
         }
+
+        for (name, val) in Self::read_array(self.c_energy_pwr) {
+            let low = name.to_ascii_lowercase();
+            let w = val / 1000.0; // Windows Energy Meter reports milliwatts
+            if w > 0.0 && w < 500.0 {
+                if low.contains("pkg") {
+                    s.energy_pkg_w = Some(w);
+                } else if low.contains("pp0") {
+                    s.energy_pp0_w = Some(w);
+                } else if low.contains("pp1") {
+                    s.energy_pp1_w = Some(w);
+                } else if low.contains("dram") {
+                    s.energy_dram_w = Some(w);
+                }
+            }
+        }
+        s.system_power_w = Self::read_scalar(self.c_sys_pwr)
+            .map(|mw| mw / 1000.0)
+            .filter(|&w| w > 0.0 && w < 1000.0);
+        s.cpu_c1_pct = Self::read_scalar(self.c_cpu_c1);
+        s.cpu_c2_pct = Self::read_scalar(self.c_cpu_c2);
+        s.cpu_c3_pct = Self::read_scalar(self.c_cpu_c3);
+        s.perf_limit_flags = Self::read_scalar(self.c_perf_lim_flags).map(|v| v as u32);
+        s.perf_limit_pct = Self::read_scalar(self.c_perf_lim_pct);
 
         s.gpu_dedicated_mb = Self::read_array(self.c_gpu_ded).iter().map(|(_, v)| *v).sum::<f64>() / 1_048_576.0;
         s.gpu_shared_mb = Self::read_array(self.c_gpu_shr).iter().map(|(_, v)| *v).sum::<f64>() / 1_048_576.0;
@@ -1375,17 +1423,18 @@ impl<'a> PawnConn<'a> {
 
         if let Some(l) = lib {
             let mut h: HANDLE = ptr::null_mut();
-            let hr = unsafe { (l.open)(&mut h) };
+            let mut hr = unsafe { (l.open)(&mut h) };
+            let err = (hr as u32) & 0xFFFF;
+            if hr < 0 && (err == 2 || err == 3) {
+                ensure_pawnio_driver_started();
+                hr = unsafe { (l.open)(&mut h) };
+            }
             if hr >= 0 && !h.is_null() {
                 return Ok(PawnConn::Dll(l, h));
             }
-            let err = (hr as u32) & 0xFFFF;
-            if err == 2 || err == 3 {
-                ensure_pawnio_driver_started();
-                let hr2 = unsafe { (l.open)(&mut h) };
-                if hr2 >= 0 && !h.is_null() {
-                    return Ok(PawnConn::Dll(l, h));
-                }
+            // Fall through to direct DeviceIoControl in case PawnIOLib.dll returned an error
+            if let Ok(dh) = try_direct() {
+                return Ok(PawnConn::Direct(dh));
             }
             return Err(hr as DWORD);
         }
@@ -1741,28 +1790,10 @@ pub fn probe_pawnio(topo: &CoreTopology, cpu_name: &str, read_thinkpad_ec: bool)
         }
     }
 
-    // 3. ThinkPad EC Read-Only (LpcThinkpadEC 0x1600/0x1604 first, LpcACPIEC 0x62/0x66 fallback; NEVER writes 0x81)
+    // 3. ThinkPad EC Read-Only (LpcThinkpadEC 0x1600/0x1604 first; falls back to LpcACPIEC 0x62/0x66 if no EC bytes respond; NEVER writes 0x81)
     if read_thinkpad_ec {
-        let mut ec_choice: Option<(PawnConn, u64, u64, &str)> = None;
-        if let Some(tp_blob) = load_verified_module("LpcThinkpadEC.bin", HASH_THINKPAD_EC, EMBED_THINKPAD_EC) {
-            if let Ok(conn) = PawnConn::open(lib.as_ref()) {
-                if conn.load_blob(&tp_blob).is_ok() {
-                    ec_choice = Some((conn, 0x1600, 0x1604, "ThinkPadEC"));
-                }
-            }
-        }
-        if ec_choice.is_none() {
-            if let Some(acpi_blob) = load_verified_module("LpcACPIEC.bin", HASH_ACPI_EC, EMBED_ACPI_EC) {
-                if let Ok(conn) = PawnConn::open(lib.as_ref()) {
-                    if conn.load_blob(&acpi_blob).is_ok() {
-                        ec_choice = Some((conn, 0x62, 0x66, "ACPIEC"));
-                    }
-                }
-            }
-        }
-
-        if let Some((conn, dport, cport, tag)) = ec_choice {
-            loaded_parts.push(tag);
+        let probe_ec_bank = |conn: &PawnConn, dport: u64, cport: u64, r: &mut PawnIoReadings| -> bool {
+            let mut got_any = false;
             let mtx_name = to_wide(r"Global\Access_EC");
             let mtx = unsafe { CreateMutexW(ptr::null_mut(), 0, mtx_name.as_ptr()) };
             let locked = if !mtx.is_null() {
@@ -1772,21 +1803,25 @@ pub fn probe_pawnio(topo: &CoreTopology, cpu_name: &str, read_thinkpad_ec: bool)
             };
             if locked {
                 if let (Some(lo), Some(hi)) = (
-                    read_ec_byte_readonly(&conn, dport, cport, 0x84),
-                    read_ec_byte_readonly(&conn, dport, cport, 0x85),
+                    read_ec_byte_readonly(conn, dport, cport, 0x84),
+                    read_ec_byte_readonly(conn, dport, cport, 0x85),
                 ) {
                     let rpm = ((hi as u16) << 8) | (lo as u16);
-                    if rpm < 15_000 {
+                    if rpm < 15_000 && !(lo == 0xFF && hi == 0xFF) {
                         r.tp_fan_rpm = Some(rpm);
+                        got_any = true;
                     }
                 }
-                if let Some(ctl) = read_ec_byte_readonly(&conn, dport, cport, 0x2F) {
-                    r.tp_fan_mode = Some(match ctl {
-                        0x80 => "BIOS auto (0x80)".to_string(),
-                        0x40 => "Disengaged (0x40)".to_string(),
-                        lvl if lvl <= 7 => format!("Level {lvl}"),
-                        other => format!("0x{other:02X}"),
-                    });
+                if let Some(ctl) = read_ec_byte_readonly(conn, dport, cport, 0x2F) {
+                    if ctl != 0xFF {
+                        got_any = true;
+                        r.tp_fan_mode = Some(match ctl {
+                            0x80 => "BIOS auto (0x80)".to_string(),
+                            0x40 => "Disengaged (0x40)".to_string(),
+                            lvl if lvl <= 7 => format!("Level {lvl}"),
+                            other => format!("0x{other:02X}"),
+                        });
+                    }
                 }
                 for (off, label) in [
                     (0x78, "EC CPU"),
@@ -1798,10 +1833,11 @@ pub fn probe_pawnio(topo: &CoreTopology, cpu_name: &str, read_thinkpad_ec: bool)
                     (0xC1, "EC PCI"),
                     (0xC2, "EC PWR"),
                 ] {
-                    if let Some(b) = read_ec_byte_readonly(&conn, dport, cport, off) {
+                    if let Some(b) = read_ec_byte_readonly(conn, dport, cport, off) {
                         let t = (b as i8) as i32;
                         if t > 0 && t < 125 {
                             r.tp_ec_temps.push((label.to_string(), t));
+                            got_any = true;
                         }
                     }
                 }
@@ -1811,6 +1847,26 @@ pub fn probe_pawnio(topo: &CoreTopology, cpu_name: &str, read_thinkpad_ec: bool)
             }
             if !mtx.is_null() {
                 unsafe { CloseHandle(mtx) };
+            }
+            got_any
+        };
+
+        let mut ec_done = false;
+        if let Some(tp_blob) = load_verified_module("LpcThinkpadEC.bin", HASH_THINKPAD_EC, EMBED_THINKPAD_EC) {
+            if let Ok(conn) = PawnConn::open(lib.as_ref()) {
+                if conn.load_blob(&tp_blob).is_ok() && probe_ec_bank(&conn, 0x1600, 0x1604, &mut r) {
+                    loaded_parts.push("ThinkPadEC");
+                    ec_done = true;
+                }
+            }
+        }
+        if !ec_done {
+            if let Some(acpi_blob) = load_verified_module("LpcACPIEC.bin", HASH_ACPI_EC, EMBED_ACPI_EC) {
+                if let Ok(conn) = PawnConn::open(lib.as_ref()) {
+                    if conn.load_blob(&acpi_blob).is_ok() && probe_ec_bank(&conn, 0x62, 0x66, &mut r) {
+                        loaded_parts.push("ACPIEC");
+                    }
+                }
             }
         }
     }
@@ -1853,6 +1909,9 @@ pub struct WindowsTelemetry {
     pub display_mode: String,
     pub brightness_pct: Option<i64>,
     pub has_wwan_gnss: bool,
+    pub battery_temp_c: Option<f64>,
+    pub wmi_probes: Vec<(String, f64)>,
+    pub hardware_badges: Vec<String>,
     pub external: ExternalSensors,
     pub pawnio: PawnIoReadings,
 }
@@ -1932,13 +1991,97 @@ pub fn collect(pdh_mon: &mut Option<PdhMonitor>, is_l15: bool, allow_ec: bool) -
         let spd = dimms.first().and_then(|d| d.get("Speed")).and_then(|v| v.as_i64()).unwrap_or(0);
         t.ram_spec = format!("{count}x{per_gb} GB {mfg} DDR4-{spd}").trim().to_string();
     }
-    if is_l15 {
-        t.has_wwan_gnss = !win_wmi::query(
-            r"root\CIMV2",
-            "SELECT Name FROM Win32_PnPEntity WHERE PNPClass='Sensor' AND Status='OK'",
-            &["Name"],
-        )
-        .is_empty();
+    let pnp = win_wmi::query(
+        r"root\CIMV2",
+        "SELECT Name, PNPClass, DeviceID FROM Win32_PnPEntity WHERE Status='OK'",
+        &["Name", "PNPClass", "DeviceID"],
+    );
+    let mut ipf_sen_count = 0usize;
+    let mut has_pmt = false;
+    let mut has_its = false;
+    let mut has_tpm = false;
+    let mut has_cam = false;
+    let mut has_ir_cam = false;
+    let mut has_hello = false;
+    let mut has_bt = false;
+    let mut has_wwan = false;
+    let mut has_gnss = false;
+    let mut has_wifi = false;
+    let mut has_eth = false;
+    let mut has_reader = false;
+    let mut has_audio = false;
+    for row in &pnp {
+        let name = row.get("Name").and_then(|v| v.as_str()).unwrap_or("");
+        let cls = row.get("PNPClass").and_then(|v| v.as_str()).unwrap_or("");
+        let did = row.get("DeviceID").and_then(|v| v.as_str()).unwrap_or("");
+        if did.contains("INTC1046") {
+            ipf_sen_count += 1;
+        } else if did.contains("DEV_467D") || name.contains("Platform Monitoring Technology") {
+            has_pmt = true;
+        } else if did.contains("LEN0100") || name.contains("Intelligent Thermal Solution") {
+            has_its = true;
+        } else if cls == "SecurityDevices" || name.contains("Trusted Platform Module") {
+            has_tpm = true;
+        } else if name.contains("IR Camera") {
+            has_ir_cam = true;
+        } else if cls == "Camera" {
+            has_cam = true;
+        } else if cls == "Biometric" || name.contains("Windows Hello") {
+            has_hello = true;
+        } else if cls == "Bluetooth" {
+            has_bt = true;
+        } else if cls == "Sensor" && name.contains("GNSS") {
+            t.has_wwan_gnss = true;
+            has_gnss = true;
+        } else if name.contains("Quectel") || name.contains("Mobile Broadband") {
+            has_wwan = true;
+        } else if cls == "Net" && (name.contains("Wi-Fi") || name.contains("Wireless")) {
+            has_wifi = true;
+        } else if cls == "Net" && name.contains("Ethernet") && !name.contains("Miniport") {
+            has_eth = true;
+        } else if cls == "MTD" || name.contains("card reader") {
+            has_reader = true;
+        } else if cls == "MEDIA" || name.contains("Realtek") {
+            has_audio = true;
+        }
+    }
+    if ipf_sen_count > 0 {
+        t.hardware_badges.push(format!("{ipf_sen_count}x IPF EC"));
+    }
+    if has_pmt {
+        t.hardware_badges.push("Intel PMT".to_string());
+    }
+    if has_its {
+        t.hardware_badges.push("Lenovo ITS".to_string());
+    }
+    if has_tpm {
+        t.hardware_badges.push("TPM 2.0".to_string());
+    }
+    if has_wifi {
+        t.hardware_badges.push("Wi-Fi".to_string());
+    }
+    if has_eth {
+        t.hardware_badges.push("GbE".to_string());
+    }
+    if has_bt {
+        t.hardware_badges.push("BT".to_string());
+    }
+    if has_wwan || has_gnss {
+        t.hardware_badges.push(if has_gnss { "LTE/GNSS".to_string() } else { "LTE".to_string() });
+    }
+    if has_ir_cam && has_cam {
+        t.hardware_badges.push("FHD+IR Cam".to_string());
+    } else if has_cam {
+        t.hardware_badges.push("Camera".to_string());
+    }
+    if has_hello {
+        t.hardware_badges.push("Hello".to_string());
+    }
+    if has_reader {
+        t.hardware_badges.push("SD Reader".to_string());
+    }
+    if has_audio {
+        t.hardware_badges.push("Audio".to_string());
     }
 
     // CallNtPowerInformation(ProcessorInformation = 11)
@@ -1960,22 +2103,48 @@ pub fn collect(pdh_mon: &mut Option<PdhMonitor>, is_l15: bool, allow_ec: bool) -
     if let Some(mon) = pdh_mon.as_mut() {
         t.pdh = mon.collect();
     }
-    if t.pdh.thermal_zones.is_empty() {
-        for row in win_wmi::query(
-            r"root\WMI",
-            "SELECT InstanceName, CurrentTemperature FROM MSAcpi_ThermalZoneTemperature",
-            &["InstanceName", "CurrentTemperature"],
-        ) {
-            if let Some(dk) = row.get("CurrentTemperature").and_then(|v| v.as_f64()) {
-                let tc = dk / 10.0 - 273.15;
-                if tc > -20.0 && tc < 150.0 {
+    // Always merge any elevated ACPI/WMI thermal zones not already surfaced by PDH
+    for row in win_wmi::query(
+        r"root\WMI",
+        "SELECT InstanceName, CurrentTemperature FROM MSAcpi_ThermalZoneTemperature",
+        &["InstanceName", "CurrentTemperature"],
+    ) {
+        if let Some(dk) = row.get("CurrentTemperature").and_then(|v| v.as_f64()) {
+            let tc = dk / 10.0 - 273.15;
+            if tc > -20.0 && tc < 150.0 {
+                let iname = row.get("InstanceName").and_then(|v| v.as_str()).unwrap_or("ACPI").to_string();
+                let dup = t.pdh.thermal_zones.iter().any(|z| {
+                    let zn = z.name.trim_start_matches(r"\_TZ.").trim_end_matches("_0");
+                    iname.contains(zn) || zn == iname
+                });
+                if !dup {
                     t.pdh.thermal_zones.push(ThermalZoneReading {
-                        name: row.get("InstanceName").and_then(|v| v.as_str()).unwrap_or("ACPI").to_string(),
+                        name: iname,
                         temp_c: tc,
                         passive_pct: None,
                         throttle_reasons: None,
                     });
                 }
+            }
+        }
+    }
+    if let Some(bt) = win_wmi::query(r"root\WMI", "SELECT Temperature FROM BatteryTemperature", &["Temperature"])
+        .into_iter()
+        .next()
+    {
+        if let Some(dk) = bt.get("Temperature").and_then(|v| v.as_f64()) {
+            let tc = dk / 10.0 - 273.15;
+            if tc > 0.0 && tc < 100.0 {
+                t.battery_temp_c = Some(tc);
+            }
+        }
+    }
+    for row in win_wmi::query(r"root\CIMV2", "SELECT Name, CurrentReading FROM Win32_TemperatureProbe", &["Name", "CurrentReading"]) {
+        if let Some(raw) = row.get("CurrentReading").and_then(|v| v.as_f64()) {
+            let tc = raw / 10.0;
+            if tc > 0.0 && tc < 120.0 {
+                let label = row.get("Name").and_then(|v| v.as_str()).unwrap_or("SMBIOS Probe").trim().to_string();
+                t.wmi_probes.push((label, tc));
             }
         }
     }

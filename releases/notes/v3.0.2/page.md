@@ -15,9 +15,10 @@ Yes. Pick the file for your computer:
 
 ## Why this matters
 
-1. **Standalone `.exe` works as Admin straight from Downloads.** PawnIO modules (`IntelMSR`, `IntelPCHThermal`, `AMDFamily17`, `LpcThinkpadEC`, `LpcACPIEC`) are embedded right inside the executable and SHA-256 verified before loading, with direct `DeviceIoControl` + `StartServiceW("PawnIO")` support.
-2. **Zero-flicker in-place redraw on Windows Console and Windows Terminal.** Uses `\x1b[H` + per-line `\x1b[K` + hidden cursor `\x1b[?25l` in one single write instead of clearing the whole screen before drawing.
-3. **Compiled for every OS with crisp >256 px Gorilla icons.**
+1. **Auto-elevates via UAC & embeds PawnIO modules inside every `.exe`.** Both Windows executables include a `requireAdministrator` manifest (so clicking them prompts UAC and starts elevated automatically) plus embedded SHA-256-verified PawnIO modules (`IntelMSR`, `IntelPCHThermal`, `AMDFamily17`, `LpcThinkpadEC`, `LpcACPIEC`), direct `DeviceIoControl`, and `StartServiceW("PawnIO")`.
+2. **Every Windows sensor exposed.** Combines PawnIO silicon telemetry with native Windows PDH `Energy Meter` RAPL (`PKG`/`PP0`/`PP1`/`DRAM`), `Power Meter`, `C1/C2/C3` residency, PPM limit flags, elevated `MSAcpi_ThermalZoneTemperature` / `BatteryTemperature`, `Win32_PhysicalMemory` DIMMs, panel resolution/Hz/brightness, NIC speed/RX/TX, and active platform devices (`IPF SEN1..SEN6`, `Intel PMT`, `Lenovo ITS`, `TPM 2.0`, `LTE/GNSS`, cameras, audio).
+3. **Zero-flicker in-place redraw on Windows Console and Windows Terminal.** Uses `\x1b[H` + per-line `\x1b[K` + hidden cursor `\x1b[?25l` in one single write instead of clearing the whole screen before drawing.
+4. **Compiled for every OS with crisp >256 px Gorilla icons.**
 
 | File | Bytes | SHA-256 |
 |---|---|---|
@@ -32,10 +33,10 @@ This is the complete explanation, not a summary of one. Nothing below is behind 
 
 ### What changed for you
 
-- **Running the downloaded `.exe` as Administrator now reveals CPU core temperatures, CPU wattage, chipset temperature, and fan speed immediately.** In `v3.0.1`, the PawnIO sensor modules were only loaded from a folder next to the `.exe`, so running the standalone `.exe` from `Downloads` showed `N/A` even as Administrator. In `v3.0.2`, those signed read-only modules are compiled right inside the `.exe` (and checked with SHA-256 before loading), and the `PawnIO` driver is started automatically if it was stopped.
-- **No more flashing while running.** Instead of wiping the whole screen blank every 2 seconds before drawing, the dashboard now updates lines smoothly in place with the cursor hidden — matching the Linux terminal experience on both classic Windows Console (`conhost.exe`) and Windows Terminal.
-- **More ThinkPad L15 & Windows hardware details exposed.** Added memory DIMM count, size, vendor, and DDR speed (`2x32 GB SK Hynix DDR4-3200`), panel resolution, refresh rate, and brightness percentage (`1920x1080 @ 60Hz (69% bright)`), plus active network adapter link speed and live RX/TX throughput.
-- **Better diagnostics.** If PawnIO is not installed or not run as Administrator, the dashboard prints the exact reason instead of a generic message.
+- **Starts elevated automatically with UAC.** Both Windows executables now embed a `requireAdministrator` manifest, so double-clicking or launching them pops up the Windows UAC prompt and runs elevated right away without needing right-click -> "Run as administrator".
+- **Standalone `.exe` reveals CPU core temperatures, CPU wattage, chipset temperature, and fan speed immediately.** Signed read-only PawnIO sensor modules are compiled inside the `.exe` (verified with SHA-256 before loading), `PawnIO` starts automatically if stopped, and ThinkPad EC automatically falls back from `0x1600/0x1604` to standard ACPI EC `0x62/0x66`.
+- **Full Windows sensor & hardware exposure.** Adds Windows PDH `Energy Meter` RAPL (`PKG` / `PP0` Cores / `PP1` Iris Xe / `DRAM`), `Power Meter` total system draw, CPU `C1/C2/C3` deep sleep percentages, memory DIMM layout (`2x32 GB SK Hynix DDR4-3200`), panel resolution/Hz/brightness, active Wi-Fi/Ethernet link speed and RX/TX KB/s, and enumerated platform devices (`IPF SEN1..SEN6`, `Intel PMT`, `Lenovo ITS`, `TPM 2.0`, `Quectel LTE/GNSS`, cameras, biometric, audio).
+- **No more flashing while running.** Updates lines smoothly in place with cursor hidden — matching the Linux terminal experience on both classic Windows Console (`conhost.exe`) and Windows Terminal.
 
 ### Two Windows editions and all OSes in one place
 
@@ -58,5 +59,8 @@ Written for someone who will audit, fork or change the code. It covers the same 
 - Embedded SHA-256-verified PawnIO 0.2.12 modules (`IntelMSR.bin`, `IntelPCHThermal.bin`, `AMDFamily17.bin`, `LpcThinkpadEC.bin`, `LpcACPIEC.bin`) via `include_bytes!("../pawnio/...")` in `src/win_sensors.rs`, allowing standalone Windows `.exe` binaries to unlock MSR, PCH, AMD SMN, and read-only EC sensors from any directory without separate `.bin` files.
 - Added `PawnConn::Direct` fallback (`\\.\GLOBALROOT\Device\PawnIO` / `\\.\PawnIO` `DeviceIoControl` IOCTLs `0xA1B22084` / `0xA1B22104`) when `PawnIOLib.dll` is absent, plus `ensure_pawnio_driver_started()` (`OpenSCManagerW` + `OpenServiceW("PawnIO")` + `StartServiceW`), plus `LpcACPIEC` (`0x62`/`0x66`) read-only `0x80` fallback when `LpcThinkpadEC` (`0x1600`/`0x1604`) returns unsupported.
 - Eliminated Windows Console (`conhost.exe`) redraw flashing in `src/lib.rs`: hides cursor (`\x1b[?25l`), moves home (`\x1b[H`), appends `\x1b[K` per line, clears trailing lines (`\x1b[J`) only after the footer, and flushes one single buffer per frame (clearing `\x1b[2J` only on terminal dimension change).
+- Embedded `assets/icons/sensors-gorilla.manifest` (`CREATEPROCESS_MANIFEST_RESOURCE_ID 1 RT_MANIFEST` in `assets/icons/app.rc`) with `<requestedExecutionLevel level="requireAdministrator" uiAccess="false"/>` and `PerMonitorV2` DPI awareness into all Windows binary targets.
+- Added native Windows PDH `\Energy Meter(*)\Power` (`RAPL_Package0_PKG`, `PP0`, `PP1`, `DRAM`), `\Power Meter(_Total)\Power`, `\Processor Information(_Total)\% C1/C2/C3 Time`, and `Performance Limit Flags` / `% Performance Limit` counters in `src/win_sensors.rs`, plus elevated `MSAcpi_ThermalZoneTemperature` merging, `BatteryTemperature`, `Win32_TemperatureProbe`, and `Win32_PnPEntity` platform hardware badge enumeration.
+- Fixed ThinkPad EC probing in `probe_pawnio` to test actual read-only EC register reads on `LpcThinkpadEC` (`0x1600`/`0x1604`) before accepting, falling through to `LpcACPIEC` (`0x62`/`0x66`) when secondary EC ports return `0xFF`/no data, and allowed `PawnConn::open` to fall through to `PawnConn::Direct` when `PawnIOLib.dll` fails for non-permission errors.
 - Enumerated `Win32_PhysicalMemory` DIMMs (`ram_spec`), `WmiMonitorBrightness` + display resolution/Hz (`display_mode`, `brightness_pct`), `Win32_PnPEntity` Sensor count (`has_wwan_gnss`), and PDH `\Network Interface(*)` RX/TX KB/s + link Mbps in `src/win_sensors.rs` and `src/win_dashboard.rs`.
 - Added `.github/workflows/ci.yml` Windows `fetch_pawnio_modules.ps1` step before `cargo test` / `cargo build` so `include_bytes!` resolves in CI.

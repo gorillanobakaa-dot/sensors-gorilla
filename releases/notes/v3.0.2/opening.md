@@ -15,9 +15,10 @@ Yes. Pick the file for your computer:
 
 ## Why this matters
 
-1. **Standalone `.exe` works as Admin straight from Downloads.** PawnIO modules (`IntelMSR`, `IntelPCHThermal`, `AMDFamily17`, `LpcThinkpadEC`, `LpcACPIEC`) are embedded right inside the executable and SHA-256 verified before loading, with direct `DeviceIoControl` + `StartServiceW("PawnIO")` support.
-2. **Zero-flicker in-place redraw on Windows Console and Windows Terminal.** Uses `\x1b[H` + per-line `\x1b[K` + hidden cursor `\x1b[?25l` in one single write instead of clearing the whole screen before drawing.
-3. **Compiled for every OS with crisp >256 px Gorilla icons.**
+1. **Auto-elevates via UAC & embeds PawnIO modules inside every `.exe`.** Both Windows executables include a `requireAdministrator` manifest (so clicking them prompts UAC and starts elevated automatically) plus embedded SHA-256-verified PawnIO modules (`IntelMSR`, `IntelPCHThermal`, `AMDFamily17`, `LpcThinkpadEC`, `LpcACPIEC`), direct `DeviceIoControl`, and `StartServiceW("PawnIO")`.
+2. **Every Windows sensor exposed.** Combines PawnIO silicon telemetry with native Windows PDH `Energy Meter` RAPL (`PKG`/`PP0`/`PP1`/`DRAM`), `Power Meter`, `C1/C2/C3` residency, PPM limit flags, elevated `MSAcpi_ThermalZoneTemperature` / `BatteryTemperature`, `Win32_PhysicalMemory` DIMMs, panel resolution/Hz/brightness, NIC speed/RX/TX, and active platform devices (`IPF SEN1..SEN6`, `Intel PMT`, `Lenovo ITS`, `TPM 2.0`, `LTE/GNSS`, cameras, audio).
+3. **Zero-flicker in-place redraw on Windows Console and Windows Terminal.** Uses `\x1b[H` + per-line `\x1b[K` + hidden cursor `\x1b[?25l` in one single write instead of clearing the whole screen before drawing.
+4. **Compiled for every OS with crisp >256 px Gorilla icons.**
 
 | File | Bytes | SHA-256 |
 |---|---|---|
