@@ -1,4 +1,4 @@
-<!-- Version: 3.0.2 · updated 26-11-18-03-19 -->
+<!-- Version: 3.0.3 · updated 26-11-18-03-47 -->
 # sensors.gorilla 🦍
 
 <!-- WHO-THIS-IS-FOR: managed block, do not edit by hand -->

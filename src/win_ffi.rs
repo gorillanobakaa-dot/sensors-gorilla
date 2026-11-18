@@ -380,6 +380,7 @@ extern "system" {
         ReturnedLength: *mut DWORD,
     ) -> BOOL;
     pub fn GetCurrentThread() -> HANDLE;
+    pub fn GetCurrentProcess() -> HANDLE;
     pub fn SetThreadAffinityMask(hThread: HANDLE, dwThreadAffinityMask: usize) -> usize;
     pub fn LoadLibraryW(lpLibFileName: LPCWSTR) -> HMODULE;
     pub fn GetProcAddress(hModule: HMODULE, lpProcName: LPCSTR) -> *const c_void;
@@ -504,6 +505,26 @@ extern "system" {
     pub fn OpenServiceW(hSCManager: HANDLE, lpServiceName: LPCWSTR, dwDesiredAccess: DWORD) -> HANDLE;
     pub fn StartServiceW(hService: HANDLE, dwNumServiceArgs: DWORD, lpServiceArgVectors: *const LPCWSTR) -> BOOL;
     pub fn CloseServiceHandle(hSCObject: HANDLE) -> BOOL;
+    pub fn OpenProcessToken(ProcessHandle: HANDLE, DesiredAccess: DWORD, TokenHandle: *mut HANDLE) -> BOOL;
+    pub fn GetTokenInformation(
+        TokenHandle: HANDLE,
+        TokenInformationClass: DWORD,
+        TokenInformation: LPVOID,
+        TokenInformationLength: DWORD,
+        ReturnLength: *mut DWORD,
+    ) -> BOOL;
+}
+
+#[link(name = "shell32")]
+extern "system" {
+    pub fn ShellExecuteW(
+        hwnd: HANDLE,
+        lpOperation: LPCWSTR,
+        lpFile: LPCWSTR,
+        lpParameters: LPCWSTR,
+        lpDirectory: LPCWSTR,
+        nShowCmd: i32,
+    ) -> HANDLE;
 }
 
 /// Convert Rust string to NUL-terminated UTF-16 Vec.

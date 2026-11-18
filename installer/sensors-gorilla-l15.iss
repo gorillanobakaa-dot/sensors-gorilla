@@ -1,5 +1,5 @@
 #define AppName "sensors.gorilla (ThinkPad L15 Gen 3)"
-#define AppVersion "3.0.2"
+#define AppVersion "3.0.3"
 #define AppExe "sensors-gorilla-l15.exe"
 #define AppPublisher "Gorilla System Tools"
 #define AppURL "https://github.com/gorillanobakaa-dot/sensors-gorilla"
@@ -39,9 +39,8 @@ Source: "..\pawnio\COPYING"; DestDir: "{app}\pawnio"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\sensors.gorilla ThinkPad L15 Gen 3"; Filename: "wt.exe"; Parameters: """{app}\{#AppExe}"""; IconFilename: "{app}\sensors-gorilla.ico"
-Name: "{group}\sensors.gorilla L15 (Command Prompt)"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\sensors-gorilla.ico"
-Name: "{autodesktop}\sensors.gorilla (ThinkPad L15)"; Filename: "wt.exe"; Parameters: """{app}\{#AppExe}"""; IconFilename: "{app}\sensors-gorilla.ico"; Tasks: desktopicon
+Name: "{group}\sensors.gorilla ThinkPad L15 Gen 3"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\sensors-gorilla.ico"
+Name: "{autodesktop}\sensors.gorilla (ThinkPad L15)"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\sensors-gorilla.ico"; Tasks: desktopicon
 Name: "{group}\Uninstall sensors.gorilla L15"; Filename: "{uninstallexe}"
 
 [Registry]

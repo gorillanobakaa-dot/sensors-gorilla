@@ -1,5 +1,5 @@
 #!/bin/bash
-# Version: 3.0.2 · updated 26-11-18-03-19
+# Version: 3.0.3 · updated 26-11-18-03-47
 # Install sensors.gorilla + desktop/app icons on Linux or macOS without on-the-fly compilation.
 set -euo pipefail
 

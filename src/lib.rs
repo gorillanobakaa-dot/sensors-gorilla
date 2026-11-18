@@ -27,6 +27,8 @@ pub struct CliOpts {
     pub json: bool,
     pub interval: f64,
     pub no_ec: bool,
+    pub no_elevate: bool,
+    pub elevated_child: bool,
 }
 
 pub fn parse_cli(prog_name: &str, desc: &str) -> CliOpts {
@@ -36,13 +38,15 @@ pub fn parse_cli(prog_name: &str, desc: &str) -> CliOpts {
         json: false,
         interval: 2.0,
         no_ec: false,
+        no_elevate: false,
+        elevated_child: false,
     };
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-h" | "--help" => {
                 println!(
-                    "usage: {prog_name} [-h] [-V] [-1] [-w] [--json] [-n INTERVAL] [--no-ec]\n\n{desc}\n\noptions:\n  -h, --help            show this help message and exit\n  -V, --version         show program's version number and exit\n  -1, --once            print one snapshot and exit\n  -w, --watch           live view (default when attached to a terminal)\n  --json                print one reading as JSON and exit\n  -n, --interval SEC    refresh interval in seconds (default: 2.0)\n  --no-ec               skip ThinkPad EC read-only probe (L15 Windows build)"
+                    "usage: {prog_name} [-h] [-V] [-1] [-w] [--json] [-n INTERVAL] [--no-ec] [--no-elevate]\n\n{desc}\n\noptions:\n  -h, --help            show this help message and exit\n  -V, --version         show program's version number and exit\n  -1, --once            print one snapshot and exit\n  -w, --watch           live view (default when attached to a terminal)\n  --json                print one reading as JSON and exit\n  -n, --interval SEC    refresh interval in seconds (default: 2.0)\n  --no-ec               skip ThinkPad EC read-only probe (L15 Windows build)\n  --no-elevate          do not prompt UAC for Administrator privileges on startup"
                 );
                 std::process::exit(0);
             }
@@ -54,6 +58,8 @@ pub fn parse_cli(prog_name: &str, desc: &str) -> CliOpts {
             "-w" | "--watch" => opts.once = false,
             "--json" => opts.json = true,
             "--no-ec" => opts.no_ec = true,
+            "--no-elevate" => opts.no_elevate = true,
+            "--elevated-child" => opts.elevated_child = true,
             "-n" | "--interval" => {
                 if i + 1 < args.len() {
                     if let Ok(v) = args[i + 1].parse::<f64>() {
@@ -85,6 +91,12 @@ pub fn run_app(is_l15_windows: bool) {
 
     #[cfg(target_os = "windows")]
     {
+        let interactive_watch = win_sensors::stdout_isatty() && !opts.once && !opts.json;
+        if interactive_watch && !opts.no_elevate && !opts.elevated_child && !win_sensors::is_elevated() {
+            if win_sensors::relaunch_as_admin() {
+                return;
+            }
+        }
         win_sensors::init_console();
         win_sensors::install_ctrl_c();
         let mut pdh_mon = win_sensors::PdhMonitor::new();

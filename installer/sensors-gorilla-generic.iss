@@ -1,5 +1,5 @@
 #define AppName "sensors.gorilla (Windows Generic)"
-#define AppVersion "3.0.2"
+#define AppVersion "3.0.3"
 #define AppExe "sensors-gorilla.exe"
 #define AppPublisher "Gorilla System Tools"
 #define AppURL "https://github.com/gorillanobakaa-dot/sensors-gorilla"
@@ -38,9 +38,8 @@ Source: "..\pawnio\COPYING"; DestDir: "{app}\pawnio"; Flags: ignoreversion
 Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\sensors.gorilla (Generic Windows)"; Filename: "wt.exe"; Parameters: """{app}\{#AppExe}"""; IconFilename: "{app}\sensors-gorilla.ico"
-Name: "{group}\sensors.gorilla (Command Prompt)"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\sensors-gorilla.ico"
-Name: "{autodesktop}\sensors.gorilla (Generic)"; Filename: "wt.exe"; Parameters: """{app}\{#AppExe}"""; IconFilename: "{app}\sensors-gorilla.ico"; Tasks: desktopicon
+Name: "{group}\sensors.gorilla (Generic Windows)"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\sensors-gorilla.ico"
+Name: "{autodesktop}\sensors.gorilla (Generic)"; Filename: "{app}\{#AppExe}"; IconFilename: "{app}\sensors-gorilla.ico"; Tasks: desktopicon
 Name: "{group}\Uninstall sensors.gorilla Generic"; Filename: "{uninstallexe}"
 
 [Registry]

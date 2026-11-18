@@ -33,6 +33,64 @@ pub fn ctrl_c_pressed() -> bool {
     CTRL_C_PRESSED.load(Ordering::SeqCst)
 }
 
+/// Check whether the current Windows process holds an elevated Administrator token.
+pub fn is_elevated() -> bool {
+    unsafe {
+        let mut token: HANDLE = ptr::null_mut();
+        if OpenProcessToken(GetCurrentProcess(), 0x0008 /* TOKEN_QUERY */, &mut token) == 0 || token.is_null() {
+            return false;
+        }
+        let mut elevated: DWORD = 0;
+        let mut ret_len: DWORD = 0;
+        let ok = GetTokenInformation(
+            token,
+            20, // TokenElevation
+            &mut elevated as *mut DWORD as LPVOID,
+            std::mem::size_of::<DWORD>() as DWORD,
+            &mut ret_len,
+        );
+        CloseHandle(token);
+        ok != 0 && elevated != 0
+    }
+}
+
+/// Re-launch the current executable elevated via ShellExecuteW("runas") so double-clicking in
+/// Explorer, Desktop shortcuts, or Windows Terminal prompts UAC cleanly (never hits 0x800702e4).
+/// Returns true if the elevated child process was started (caller should exit cleanly).
+pub fn relaunch_as_admin() -> bool {
+    let exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let mut parts: Vec<String> = vec!["--elevated-child".to_string()];
+    for arg in std::env::args().skip(1) {
+        if arg == "--elevated-child" || arg == "--no-elevate" {
+            continue;
+        }
+        if arg.contains([' ', '\t', '"']) {
+            let escaped = arg.replace('"', "\\\"");
+            parts.push(format!("\"{escaped}\""));
+        } else {
+            parts.push(arg);
+        }
+    }
+    let params = parts.join(" ");
+    let w_op = to_wide("runas");
+    let w_exe = to_wide(&exe.to_string_lossy());
+    let w_params = to_wide(&params);
+    let rc = unsafe {
+        ShellExecuteW(
+            ptr::null_mut(),
+            w_op.as_ptr(),
+            w_exe.as_ptr(),
+            w_params.as_ptr(),
+            ptr::null(),
+            1, // SW_SHOWNORMAL
+        )
+    };
+    (rc as isize) > 32
+}
+
 /// Enable UTF-8 output and 24-bit TrueColor VT processing on Windows Terminal / ConHost.
 pub fn init_console() {
     unsafe {
