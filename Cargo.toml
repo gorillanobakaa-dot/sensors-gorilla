@@ -1,0 +1,28 @@
+[package]
+name = "sensors-gorilla"
+version = "3.0.0"
+edition = "2021"
+description = "Zero-dependency compiled hardware sensor dashboard for Windows (Generic + ThinkPad L15 Gen 3), Linux, and macOS."
+repository = "https://github.com/gorillanobakaa-dot/sensors-gorilla"
+readme = "README.md"
+rust-version = "1.75"
+
+[dependencies]
+
+[[bin]]
+name = "sensors-gorilla"
+path = "src/main.rs"
+
+[[bin]]
+name = "sensors-gorilla-l15"
+path = "src/bin/sensors_gorilla_l15.rs"
+
+[[bin]]
+name = "thermal-profile-daemon"
+path = "src/bin/thermal_profile_daemon.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
